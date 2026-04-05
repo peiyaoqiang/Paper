@@ -1,0 +1,42 @@
+{
+  "task": {
+    "instruction": "pick up the red mug",
+    "max_steps": 8,
+    "approach_height_m": 0.08,
+    "refine_height_m": 0.04,
+    "lift_height_m": 0.10
+  },
+  "camera": {
+    "width": 640,
+    "height": 480,
+    "fx": 615.0,
+    "fy": 615.0,
+    "cx": 320.0,
+    "cy": 240.0
+  },
+  "robot": {
+    "max_translation_step_m": 0.02,
+    "max_rotation_step_deg": 8.0,
+    "workspace_xyz_min": [
+      0.20,
+      -0.40,
+      0.00
+    ],
+    "workspace_xyz_max": [
+      0.80,
+      0.40,
+      0.60
+    ]
+  },
+  "gripper": {
+    "open_width_m": 0.08,
+    "close_width_m": 0.00
+  },
+  "calibration": {
+    "camera_to_ee_translation_m": [
+      0.02,
+      0.00,
+      0.08
+    ]
+  }
+}

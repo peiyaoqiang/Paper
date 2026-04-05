@@ -1,0 +1,9 @@
+# Abstract Draft
+
+## English
+
+Vision-language-action models have recently shown strong potential for general robot manipulation, but their direct deployment to eye-in-hand grasping systems remains challenging due to viewpoint shift, action-space mismatch, and limited robustness in cluttered real-world scenes. In this work, we present an eye-in-hand grasping system that integrates OpenVLA with RGB-D geometric refinement and closed-loop execution on a Kinova Gen3 manipulator equipped with an Intel RealSense D435i wrist camera and a parallel gripper. Our method uses OpenVLA to generate language-conditioned high-level action proposals from wrist-view RGB observations, then adapts these actions into a safe robot control space and refines the final grasp pose using depth measurements and hand-eye calibration. During the final approach stage, a closed-loop execution module corrects residual pose errors before grasp closure. This design combines the semantic generalization ability of vision-language-action models with the geometric reliability required for real robot grasping. We evaluate the system on language-specified target grasping tasks in cluttered tabletop environments under varying occlusion levels. Experimental results are expected to show that the proposed method improves target grasp success rate and execution robustness compared with direct OpenVLA execution and conventional geometric baselines.
+
+## 中文
+
+视觉-语言-动作模型近年来在通用机器人操作中展现出较强潜力，但将其直接部署到眼在手上的真实抓取系统中仍然面临视角分布偏移、动作空间不匹配以及杂乱场景鲁棒性不足等问题。本文提出了一种面向眼在手上抓取的 OpenVLA 与 RGB-D 几何修正结合的闭环执行系统，并在搭载 Intel RealSense D435i 腕部相机和并联夹爪的 Kinova Gen3 机械臂平台上进行验证。该方法首先利用 OpenVLA 根据腕部视角 RGB 图像和语言指令生成高层动作建议，然后将其映射到安全的机器人控制空间，并结合深度观测和手眼标定结果对最终抓取位姿进行几何修正。在末端接近阶段，系统进一步通过闭环执行模块修正残余位姿误差后完成抓取。该设计将视觉-语言-动作模型的语义泛化能力与真实机器人抓取所需的几何可靠性结合起来。我们将在杂乱桌面环境中、针对不同遮挡程度下的语言指定目标抓取任务评估该方法，并预期其实验结果将优于直接使用 OpenVLA 执行和传统几何抓取基线方法。
