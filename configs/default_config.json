@@ -32,6 +32,18 @@
     "open_width_m": 0.08,
     "close_width_m": 0.00
   },
+  "policy": {
+    "model_name": "openvla-remote",
+    "mode": "remote_api",
+    "remote_url": "http://127.0.0.1:8000/predict",
+    "remote_timeout_s": 120.0,
+    "unnorm_key": "libero_spatial",
+    "image_input_key": "wrist_image"
+  },
+  "logging": {
+    "enabled": true,
+    "log_dir": "analysis/logs"
+  },
   "calibration": {
     "camera_to_ee_translation_m": [
       0.02,

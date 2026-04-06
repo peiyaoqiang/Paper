@@ -8,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from analysis.trial_logger import TrialLogger
 from adapters.action_adapter import ActionAdapter, ActionAdapterConfig
 from calibration.tf_manager import TFConfig, TFManager
 from drivers.gripper_driver import GripperConfig, GripperDriver
@@ -26,6 +27,7 @@ def load_config() -> dict:
 
 def main() -> None:
     config = load_config()
+    trial_logger = TrialLogger(config["logging"]["log_dir"]) if config["logging"]["enabled"] else None
 
     camera = RealSenseDriver(
         RealSenseConfig(
@@ -46,7 +48,16 @@ def main() -> None:
             close_width_m=config["gripper"]["close_width_m"],
         ),
     )
-    policy = OpenVLAWrapper(OpenVLAConfig())
+    policy = OpenVLAWrapper(
+        OpenVLAConfig(
+            model_name=config["policy"]["model_name"],
+            mode=config["policy"]["mode"],
+            remote_url=config["policy"]["remote_url"],
+            remote_timeout_s=config["policy"]["remote_timeout_s"],
+            unnorm_key=config["policy"]["unnorm_key"],
+            image_input_key=config["policy"]["image_input_key"],
+        )
+    )
     action_adapter = ActionAdapter(
         ActionAdapterConfig(
             max_translation_step_m=config["robot"]["max_translation_step_m"],
@@ -83,6 +94,7 @@ def main() -> None:
             max_steps=config["task"]["max_steps"],
             lift_height_m=config["task"]["lift_height_m"],
         ),
+        trial_logger=trial_logger,
     )
 
     result = executor.run_once(config["task"]["instruction"])
@@ -94,6 +106,8 @@ def main() -> None:
         print("Refined grasp quality:", result.grasp.quality)
     if result.failure_reason:
         print("Failure reason:", result.failure_reason)
+    if trial_logger is not None:
+        print("Trial log:", trial_logger.log_path)
 
 
 if __name__ == "__main__":

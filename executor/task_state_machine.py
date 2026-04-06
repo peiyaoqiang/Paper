@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
+from analysis.trial_logger import TrialLogger
 from adapters.action_adapter import ActionAdapter
 from common.types import ExecutionResult, Observation
 from drivers.gripper_driver import GripperDriver
@@ -28,6 +29,7 @@ class TaskStateMachine:
         action_adapter: ActionAdapter,
         grasp_refiner: GraspRefiner,
         config: TaskStateMachineConfig,
+        trial_logger: TrialLogger | None = None,
     ) -> None:
         self.camera = camera
         self.robot = robot
@@ -36,6 +38,7 @@ class TaskStateMachine:
         self.action_adapter = action_adapter
         self.grasp_refiner = grasp_refiner
         self.config = config
+        self.trial_logger = trial_logger
 
     def _build_observation(self, instruction: str) -> Observation:
         frame = self.camera.capture_frame()
@@ -76,10 +79,22 @@ class TaskStateMachine:
         trace.append("lift")
 
         success = refined_grasp.quality >= 0.5
-        return ExecutionResult(
+        result = ExecutionResult(
             success=success,
             state_trace=trace,
             message="Closed-loop grasp completed" if success else "Closed-loop grasp failed",
             failure_reason="" if success else "Low refined grasp quality",
             grasp=refined_grasp,
         )
+        if self.trial_logger is not None:
+            self.trial_logger.log_trial(
+                instruction=instruction,
+                observation=observation,
+                policy_action=policy_action,
+                safe_action=safe_action,
+                refined_grasp=refined_grasp,
+                result=result,
+                final_robot_state=self.robot.get_state(),
+                metadata={"max_steps": self.config.max_steps},
+            )
+        return result

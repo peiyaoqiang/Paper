@@ -100,6 +100,7 @@ python experiments/run_demo.py
 文件：
 
 - `policy/openvla_wrapper.py`
+- `policy/REMOTE_API_EXAMPLE.md`
 
 需要替换为：
 
