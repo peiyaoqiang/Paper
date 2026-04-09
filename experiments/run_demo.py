@@ -33,12 +33,30 @@ def main() -> None:
         RealSenseConfig(
             width=config["camera"]["width"],
             height=config["camera"]["height"],
+            mode=config["camera"]["mode"],
+            color_topic=config["camera"]["color_topic"],
+            aligned_depth_topic=config["camera"]["aligned_depth_topic"],
+            camera_info_topic=config["camera"].get("camera_info_topic", "/camera/camera/color/camera_info"),
+            capture_timeout_s=config["camera"]["capture_timeout_s"],
+            output_dir=config["camera"]["output_dir"],
+            ros_node_name=config["camera"]["ros_node_name"],
         )
     )
     robot = KinovaDriver(
         KinovaConfig(
             max_translation_step_m=config["robot"]["max_translation_step_m"],
             max_rotation_step_deg=config["robot"]["max_rotation_step_deg"],
+            mode=config["robot"]["mode"],
+            joint_state_topic=config["robot"]["joint_state_topic"],
+            twist_command_topic=config["robot"]["twist_command_topic"],
+            base_frame=config["robot"]["base_frame"],
+            ee_frame=config["robot"]["ee_frame"],
+            twist_command_frame=config["robot"].get("twist_command_frame", "tool_frame"),
+            ros_node_name=config["robot"]["ros_node_name"],
+            state_timeout_s=config["robot"]["state_timeout_s"],
+            twist_command_duration_s=config["robot"]["twist_command_duration_s"],
+            twist_publish_rate_hz=config["robot"]["twist_publish_rate_hz"],
+            twist_stop_duration_s=config["robot"]["twist_stop_duration_s"],
         )
     )
     gripper = GripperDriver(
@@ -64,11 +82,13 @@ def main() -> None:
             max_rotation_step_deg=config["robot"]["max_rotation_step_deg"],
             workspace_xyz_min=tuple(config["robot"]["workspace_xyz_min"]),
             workspace_xyz_max=tuple(config["robot"]["workspace_xyz_max"]),
+            workspace_enforced=config["robot"].get("workspace_enforced", True),
         )
     )
     tf_manager = TFManager(
         TFConfig(
             camera_to_ee_translation_m=tuple(config["calibration"]["camera_to_ee_translation_m"]),
+            camera_to_ee_quaternion_xyzw=tuple(config["calibration"]["camera_to_ee_quaternion_xyzw"]),
             fx=config["camera"]["fx"],
             fy=config["camera"]["fy"],
             cx=config["camera"]["cx"],
@@ -81,6 +101,8 @@ def main() -> None:
         config=GraspRefinerConfig(
             approach_height_m=config["task"]["approach_height_m"],
             refine_height_m=config["task"]["refine_height_m"],
+            gripper_tip_offset_ee_m=tuple(config["gripper"].get("tip_offset_ee_m", [0.0, 0.0, 0.0])),
+            default_grasp_width_m=config["gripper"]["open_width_m"],
         ),
     )
     executor = TaskStateMachine(

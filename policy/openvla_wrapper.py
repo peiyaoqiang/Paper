@@ -120,6 +120,7 @@ class OpenVLAWrapper:
         confidence = float(response.get("confidence", 0.75))
         target_pixel = self._parse_target_pixel(response.get("target_pixel"), observation)
         notes = str(response.get("notes", f"Remote {self.config.model_name} response"))
+        metadata = self._extract_remote_metadata(response)
 
         return PolicyAction(
             delta_xyz_m=delta_xyz_m,
@@ -128,6 +129,7 @@ class OpenVLAWrapper:
             confidence=confidence,
             target_pixel=target_pixel,
             notes=notes,
+            metadata=metadata,
         )
 
     def _parse_target_pixel(
@@ -146,3 +148,17 @@ class OpenVLAWrapper:
         if not path.is_file():
             return None
         return base64.b64encode(path.read_bytes()).decode("ascii")
+
+    def _extract_remote_metadata(self, response: Mapping[str, Any]) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        for key in (
+            "preprocess_ms",
+            "infer_ms",
+            "total_ms",
+            "model_name",
+            "image_size",
+            "server_timestamp_utc",
+        ):
+            if key in response:
+                metadata[key] = response[key]
+        return metadata

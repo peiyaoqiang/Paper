@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 Vector3 = Tuple[float, float, float]
+Quaternion = Tuple[float, float, float, float]
 
 
 @dataclass
@@ -13,6 +14,10 @@ class CameraFrame:
     depth_path_hint: str
     width: int
     height: int
+    fx: Optional[float] = None
+    fy: Optional[float] = None
+    cx: Optional[float] = None
+    cy: Optional[float] = None
 
 
 @dataclass
@@ -21,6 +26,7 @@ class RobotState:
     ee_position_m: Vector3
     ee_yaw_deg: float
     gripper_opening_m: float
+    ee_quaternion_xyzw: Quaternion = (0.0, 0.0, 0.0, 1.0)
 
 
 @dataclass
@@ -38,6 +44,7 @@ class PolicyAction:
     confidence: float
     target_pixel: Optional[Tuple[int, int]] = None
     notes: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -56,6 +63,7 @@ class RefinedGrasp:
     grasp_width_m: float
     quality: float
     source: str = "geometry"
+    contact_xyz_m: Optional[Vector3] = None
 
 
 @dataclass

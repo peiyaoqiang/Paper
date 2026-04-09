@@ -7,19 +7,38 @@
     "lift_height_m": 0.10
   },
   "camera": {
+    "mode": "ros2",
     "width": 640,
     "height": 480,
     "fx": 615.0,
     "fy": 615.0,
     "cx": 320.0,
-    "cy": 240.0
+    "cy": 240.0,
+    "color_topic": "/camera/camera/color/image_raw",
+    "aligned_depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
+    "camera_info_topic": "/camera/camera/color/camera_info",
+    "capture_timeout_s": 3.0,
+    "output_dir": "analysis/captures",
+    "ros_node_name": "paper_realsense_driver"
   },
   "robot": {
-    "max_translation_step_m": 0.02,
-    "max_rotation_step_deg": 8.0,
+    "mode": "ros2_twist",
+    "max_translation_step_m": 0.015,
+    "max_rotation_step_deg": 2.0,
+    "joint_state_topic": "/joint_states",
+    "twist_command_topic": "/twist_controller/commands",
+    "base_frame": "base_link",
+    "ee_frame": "end_effector_link",
+    "twist_command_frame": "tool_frame",
+    "ros_node_name": "paper_kinova_driver",
+    "state_timeout_s": 5.0,
+    "twist_command_duration_s": 0.8,
+    "twist_publish_rate_hz": 20.0,
+    "twist_stop_duration_s": 0.6,
+    "workspace_enforced": false,
     "workspace_xyz_min": [
       0.20,
-      -0.40,
+      -0.55,
       0.00
     ],
     "workspace_xyz_max": [
@@ -29,8 +48,13 @@
     ]
   },
   "gripper": {
-    "open_width_m": 0.08,
-    "close_width_m": 0.00
+    "open_width_m": 0.12,
+    "close_width_m": 0.00,
+    "tip_offset_ee_m": [
+      0.0,
+      0.0,
+      0.28
+    ]
   },
   "policy": {
     "model_name": "openvla-remote",
@@ -46,9 +70,15 @@
   },
   "calibration": {
     "camera_to_ee_translation_m": [
-      0.02,
-      0.00,
-      0.08
+      0.02816549492211143,
+      -0.06079202177808648,
+      -0.03017898793502192
+    ],
+    "camera_to_ee_quaternion_xyzw": [
+      0.011321934239452403,
+      -0.003620687265627698,
+      0.34158486052971326,
+      0.9397757644702796
     ]
   }
 }

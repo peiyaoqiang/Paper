@@ -21,6 +21,24 @@
 - 真实夹爪控制
 - 真实 `OpenVLA` 推理
 
+当前仓库已支持一个过渡版 `ROS2 RealSense` 相机模式：
+
+- 在 `configs/default_config.json` 里将 `camera.mode` 设为 `ros2`
+- 默认订阅 `/camera/camera/color/image_raw`
+- 默认订阅 `/camera/camera/aligned_depth_to_color/image_raw`
+- 会把最新 RGB 图保存为 `analysis/captures/*.png`
+- 会把对齐深度保存为 `analysis/captures/*.npy`
+
+这样本地 wrapper 就可以自动把真实 RGB 图像以 `rgb_b64` 发给远程 OpenVLA 服务
+
+当前已经验证过的真实硬件启动顺序请参考：
+
+- `REAL_ROBOT_RUNBOOK.md`
+
+截至 `2026-04-06` 的完整进展归档请参考：
+
+- `PROGRESS_ARCHIVE_2026-04-06.md`
+
 ## 目录说明
 
 - `configs/`：配置文件

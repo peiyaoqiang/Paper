@@ -54,7 +54,7 @@ class TaskStateMachine:
         policy_action = self.policy.predict_action(observation)
         trace.append("policy_predict")
 
-        safe_action = self.action_adapter.adapt(policy_action)
+        safe_action = self.action_adapter.adapt(policy_action, observation.robot_state)
         trace.append("action_adapt")
 
         if safe_action.gripper_command == "open":
@@ -64,7 +64,7 @@ class TaskStateMachine:
         self.robot.move_cartesian_delta(safe_action.delta_xyz_m, safe_action.delta_yaw_deg)
         trace.append("coarse_approach")
 
-        refined_grasp = self.grasp_refiner.refine(policy_action, self.robot.get_state())
+        refined_grasp = self.grasp_refiner.refine(policy_action, observation)
         trace.append("rgbd_refine")
 
         current_xyz = self.robot.get_state().ee_position_m

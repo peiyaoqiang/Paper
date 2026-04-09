@@ -20,6 +20,12 @@ It focuses on:
 - risks and mitigation
 - expected deliverables
 
+Archive note:
+
+For the detailed archived status snapshot on `2026-04-06`, also read:
+
+- `PROGRESS_ARCHIVE_2026-04-06.md`
+
 **中文**
 
 本文档是 `HANDOFF.md` 的协作推进版，目的是帮助项目在以下场景中顺利延续：
@@ -36,6 +42,12 @@ It focuses on:
 - 实验优先级
 - 风险与应对
 - 预期交付物
+
+归档说明：
+
+如果需要查看 `2026-04-06` 的详细状态快照，也请同时阅读：
+
+- `PROGRESS_ARCHIVE_2026-04-06.md`
 
 ## 2. Current Research Direction / 当前研究方向
 
@@ -86,6 +98,10 @@ python experiments/run_demo.py
 
 If the demo runs successfully, the collaborator can move on to real hardware integration.
 
+For the currently validated real-robot startup order and test commands, also read:
+
+- `REAL_ROBOT_RUNBOOK.md`
+
 **中文**
 
 任何接手该项目的人，建议首先阅读：
@@ -102,6 +118,10 @@ python experiments/run_demo.py
 ```
 
 如果 demo 能正常跑通，就可以继续推进真实硬件接入工作。
+
+关于当前已经验证过的真实机器人启动顺序与测试命令，还应阅读：
+
+- `REAL_ROBOT_RUNBOOK.md`
 
 ## 4. Next Two Weeks Plan / 未来两周计划
 
