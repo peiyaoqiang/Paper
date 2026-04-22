@@ -1,0 +1,10 @@
+numpy>=1.24
+pillow>=9.0
+websockets>=12.0
+msgpack>=1.0
+
+# Optional, only needed when reading a local USB/RealSense camera with OpenCV.
+opencv-python>=4.8
+
+# Optional, install from Kinova's Kortex API package/wheel on the robot laptop.
+# kortex_api

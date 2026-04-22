@@ -64,6 +64,30 @@ def main() -> None:
         GripperConfig(
             open_width_m=config["gripper"]["open_width_m"],
             close_width_m=config["gripper"]["close_width_m"],
+            mode=config["gripper"].get("mode", "state_only"),
+            ctag_serial_port=config["gripper"].get("ctag_serial_port", "/dev/ttyUSB0"),
+            ctag_baudrate=config["gripper"].get("ctag_baudrate", 115200),
+            ctag_device_id=config["gripper"].get("ctag_device_id", 1),
+            ctag_timeout_s=config["gripper"].get("ctag_timeout_s", 0.2),
+            ctag_open_pos_mm=config["gripper"].get("ctag_open_pos_mm", 850.0),
+            ctag_close_pos_mm=config["gripper"].get("ctag_close_pos_mm", 0.0),
+            ctag_max_stroke_mm=config["gripper"].get("ctag_max_stroke_mm", 850.0),
+            ctag_speed=config["gripper"].get("ctag_speed", 80),
+            ctag_close_torque=config["gripper"].get("ctag_close_torque", 80),
+            ctag_open_torque=config["gripper"].get("ctag_open_torque", 40),
+            ctag_acc_dec=config["gripper"].get("ctag_acc_dec", 80),
+            ctag_parity=config["gripper"].get("ctag_parity", "N"),
+            ctag_stopbits=config["gripper"].get("ctag_stopbits", 1),
+            ctag_enable_rs485_mode=config["gripper"].get("ctag_enable_rs485_mode", False),
+            ctag_accept_pos_reached_as_success=config["gripper"].get(
+                "ctag_accept_pos_reached_as_success", False
+            ),
+            ctag_rs485_rts_level_for_tx=config["gripper"].get("ctag_rs485_rts_level_for_tx", True),
+            ctag_rs485_rts_level_for_rx=config["gripper"].get("ctag_rs485_rts_level_for_rx", False),
+            ctag_rs485_delay_before_tx=config["gripper"].get("ctag_rs485_delay_before_tx", 0.0),
+            ctag_rs485_delay_before_rx=config["gripper"].get("ctag_rs485_delay_before_rx", 0.0),
+            open_timeout_s=config["gripper"].get("open_timeout_s", 3.0),
+            close_timeout_s=config["gripper"].get("close_timeout_s", 5.0),
         ),
     )
     policy = OpenVLAWrapper(
@@ -119,17 +143,20 @@ def main() -> None:
         trial_logger=trial_logger,
     )
 
-    result = executor.run_once(config["task"]["instruction"])
-    print("Instruction:", config["task"]["instruction"])
-    print("Success:", result.success)
-    print("Trace:", " -> ".join(result.state_trace))
-    if result.grasp:
-        print("Refined grasp target xyz:", result.grasp.target_xyz_m)
-        print("Refined grasp quality:", result.grasp.quality)
-    if result.failure_reason:
-        print("Failure reason:", result.failure_reason)
-    if trial_logger is not None:
-        print("Trial log:", trial_logger.log_path)
+    try:
+        result = executor.run_once(config["task"]["instruction"])
+        print("Instruction:", config["task"]["instruction"])
+        print("Success:", result.success)
+        print("Trace:", " -> ".join(result.state_trace))
+        if result.grasp:
+            print("Refined grasp target xyz:", result.grasp.target_xyz_m)
+            print("Refined grasp quality:", result.grasp.quality)
+        if result.failure_reason:
+            print("Failure reason:", result.failure_reason)
+        if trial_logger is not None:
+            print("Trial log:", trial_logger.log_path)
+    finally:
+        gripper.shutdown()
 
 
 if __name__ == "__main__":

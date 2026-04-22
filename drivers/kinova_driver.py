@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import threading
 import time
 from typing import List, Tuple
 
@@ -85,6 +86,19 @@ class KinovaDriver:
 
     def __post_init__(self) -> None:
         self.ros_interface: _KinovaROSInterface | None = None
+        self._continuous_servo_lock = threading.Lock()
+        self._continuous_servo_thread: threading.Thread | None = None
+        self._continuous_servo_running = False
+        self._continuous_servo_publish_rate_hz = 20.0
+        self._continuous_servo_stale_timeout_s = 2.0
+        self._continuous_servo_command_alpha = 1.0
+        self._continuous_servo_max_linear_speed_mps = 0.08
+        self._continuous_servo_max_angular_speed_rps = math.radians(20.0)
+        self._continuous_servo_last_update_time = 0.0
+        self._continuous_servo_target_linear_command: Vector3 = (0.0, 0.0, 0.0)
+        self._continuous_servo_target_angular_command: Vector3 = (0.0, 0.0, 0.0)
+        self._continuous_servo_linear_command: Vector3 = (0.0, 0.0, 0.0)
+        self._continuous_servo_angular_command: Vector3 = (0.0, 0.0, 0.0)
         if self.config.mode == "ros2_twist":
             self._init_ros2()
 
@@ -238,7 +252,6 @@ class KinovaDriver:
         stop_count = max(1, int(stop_duration / publish_period))
         for _ in range(stop_count):
             self.ros_interface.twist_pub.publish(zero_twist)
-            rclpy.spin_once(self.ros_interface, timeout_sec=0.0)
             time.sleep(publish_period)
 
     def _get_state_ros2(self) -> RobotState:
@@ -297,3 +310,173 @@ class KinovaDriver:
         for linear_velocity_command, angular_velocity_command in command_segments:
             self._publish_twist_command_ros2(linear_velocity_command, angular_velocity_command)
         self._get_state_ros2()
+
+    def start_continuous_twist_servo(
+        self,
+        publish_rate_hz: float | None = None,
+        stale_timeout_s: float = 2.0,
+        command_alpha: float = 1.0,
+        max_linear_speed_mps: float = 0.08,
+        max_angular_speed_degps: float = 20.0,
+    ) -> None:
+        if self.config.mode != "ros2_twist":
+            return
+        if self.ros_interface is None:
+            raise RuntimeError("ROS2 Kinova interface is not initialized.")
+        if self._continuous_servo_running:
+            return
+
+        with self._continuous_servo_lock:
+            self._continuous_servo_publish_rate_hz = (
+                float(publish_rate_hz)
+                if publish_rate_hz is not None
+                else float(self.config.twist_publish_rate_hz)
+            )
+            self._continuous_servo_publish_rate_hz = max(self._continuous_servo_publish_rate_hz, 1.0)
+            self._continuous_servo_stale_timeout_s = max(float(stale_timeout_s), 0.1)
+            self._continuous_servo_command_alpha = max(0.0, min(float(command_alpha), 1.0))
+            self._continuous_servo_max_linear_speed_mps = max(float(max_linear_speed_mps), 1e-4)
+            self._continuous_servo_max_angular_speed_rps = max(
+                math.radians(float(max_angular_speed_degps)),
+                1e-4,
+            )
+            self._continuous_servo_last_update_time = time.monotonic()
+            self._continuous_servo_target_linear_command = (0.0, 0.0, 0.0)
+            self._continuous_servo_target_angular_command = (0.0, 0.0, 0.0)
+            self._continuous_servo_linear_command = (0.0, 0.0, 0.0)
+            self._continuous_servo_angular_command = (0.0, 0.0, 0.0)
+            self._continuous_servo_running = True
+
+        self._continuous_servo_thread = threading.Thread(
+            target=self._continuous_twist_servo_loop,
+            name="kinova_continuous_twist_servo",
+            daemon=True,
+        )
+        self._continuous_servo_thread.start()
+
+    def set_continuous_twist_delta(
+        self,
+        delta_xyz_m: Vector3,
+        delta_yaw_deg: float,
+        horizon_s: float = 0.25,
+    ) -> None:
+        if self.config.mode != "ros2_twist":
+            self.move_cartesian_delta(delta_xyz_m, delta_yaw_deg)
+            return
+        if self.ros_interface is None:
+            raise RuntimeError("ROS2 Kinova interface is not initialized.")
+        if not self._continuous_servo_running:
+            raise RuntimeError("Continuous twist servo is not running. Call start_continuous_twist_servo first.")
+
+        duration = max(float(horizon_s), 1e-3)
+        linear_velocity_base_unclipped = tuple(float(delta / duration) for delta in delta_xyz_m)
+        angular_velocity_base_unclipped = (0.0, 0.0, math.radians(float(delta_yaw_deg)) / duration)
+        linear_speed = math.sqrt(sum(component * component for component in linear_velocity_base_unclipped))
+        if linear_speed > self._continuous_servo_max_linear_speed_mps:
+            linear_scale = self._continuous_servo_max_linear_speed_mps / max(linear_speed, 1e-9)
+            linear_velocity_base = tuple(component * linear_scale for component in linear_velocity_base_unclipped)
+        else:
+            linear_velocity_base = linear_velocity_base_unclipped
+
+        angular_speed = abs(angular_velocity_base_unclipped[2])
+        if angular_speed > self._continuous_servo_max_angular_speed_rps:
+            angular_velocity_base = (
+                0.0,
+                0.0,
+                math.copysign(self._continuous_servo_max_angular_speed_rps, angular_velocity_base_unclipped[2]),
+            )
+        else:
+            angular_velocity_base = angular_velocity_base_unclipped
+        linear_velocity_command = self._base_vector_to_command_frame(linear_velocity_base)
+        angular_velocity_command = self._base_vector_to_command_frame(angular_velocity_base)
+
+        with self._continuous_servo_lock:
+            self._continuous_servo_target_linear_command = linear_velocity_command
+            self._continuous_servo_target_angular_command = angular_velocity_command
+            self._continuous_servo_last_update_time = time.monotonic()
+
+    def stop_continuous_twist_servo(self, stop_duration_s: float = 0.3) -> None:
+        if self.config.mode != "ros2_twist":
+            return
+        if self.ros_interface is None:
+            return
+        if not self._continuous_servo_running and self._continuous_servo_thread is None:
+            return
+
+        with self._continuous_servo_lock:
+            self._continuous_servo_running = False
+            self._continuous_servo_target_linear_command = (0.0, 0.0, 0.0)
+            self._continuous_servo_target_angular_command = (0.0, 0.0, 0.0)
+            self._continuous_servo_linear_command = (0.0, 0.0, 0.0)
+            self._continuous_servo_angular_command = (0.0, 0.0, 0.0)
+
+        if self._continuous_servo_thread is not None:
+            self._continuous_servo_thread.join(timeout=1.0)
+            self._continuous_servo_thread = None
+
+        zero_twist = Twist()
+        publish_period = 1.0 / max(self.config.twist_publish_rate_hz, 1.0)
+        stop_count = max(1, int(max(stop_duration_s, publish_period) / publish_period))
+        for _ in range(stop_count):
+            self.ros_interface.twist_pub.publish(zero_twist)
+            time.sleep(publish_period)
+
+    def refresh_continuous_twist_watchdog(self) -> None:
+        if self.config.mode != "ros2_twist":
+            return
+        if not self._continuous_servo_running:
+            return
+        with self._continuous_servo_lock:
+            self._continuous_servo_last_update_time = time.monotonic()
+
+    def _continuous_twist_servo_loop(self) -> None:
+        if self.ros_interface is None:
+            return
+        publish_period = 1.0 / max(self._continuous_servo_publish_rate_hz, 1.0)
+        zero_twist = Twist()
+        while True:
+            with self._continuous_servo_lock:
+                running = self._continuous_servo_running
+                target_linear_velocity_command = self._continuous_servo_target_linear_command
+                target_angular_velocity_command = self._continuous_servo_target_angular_command
+                linear_velocity_command = self._continuous_servo_linear_command
+                angular_velocity_command = self._continuous_servo_angular_command
+                last_update_time = self._continuous_servo_last_update_time
+                stale_timeout_s = self._continuous_servo_stale_timeout_s
+                command_alpha = self._continuous_servo_command_alpha
+            if not running:
+                break
+
+            stale = (time.monotonic() - last_update_time) > stale_timeout_s
+            if stale:
+                target_linear_velocity_command = (0.0, 0.0, 0.0)
+                target_angular_velocity_command = (0.0, 0.0, 0.0)
+                linear_velocity_command = (0.0, 0.0, 0.0)
+                angular_velocity_command = (0.0, 0.0, 0.0)
+                twist = zero_twist
+            else:
+                linear_velocity_command = tuple(
+                    current + command_alpha * (target - current)
+                    for current, target in zip(linear_velocity_command, target_linear_velocity_command)
+                )
+                angular_velocity_command = tuple(
+                    current + command_alpha * (target - current)
+                    for current, target in zip(angular_velocity_command, target_angular_velocity_command)
+                )
+                twist = Twist()
+                twist.linear.x = linear_velocity_command[0]
+                twist.linear.y = linear_velocity_command[1]
+                twist.linear.z = linear_velocity_command[2]
+                twist.angular.x = angular_velocity_command[0]
+                twist.angular.y = angular_velocity_command[1]
+                twist.angular.z = angular_velocity_command[2]
+
+            with self._continuous_servo_lock:
+                self._continuous_servo_linear_command = linear_velocity_command
+                self._continuous_servo_angular_command = angular_velocity_command
+                if stale:
+                    self._continuous_servo_target_linear_command = (0.0, 0.0, 0.0)
+                    self._continuous_servo_target_angular_command = (0.0, 0.0, 0.0)
+
+            self.ros_interface.twist_pub.publish(twist)
+            time.sleep(publish_period)

@@ -122,6 +122,9 @@ class TFManager:
             for row in range(3)
         )
 
+    def camera_vector_to_ee_vector(self, camera_vector_m: Vector3) -> Vector3:
+        return self._rotate_camera_to_ee(camera_vector_m)
+
     def _rotate_ee_to_base_yaw_only(self, ee_relative_xyz_m: Vector3, ee_yaw_deg: float) -> Vector3:
         yaw_rad = math.radians(ee_yaw_deg)
         cos_yaw = math.cos(yaw_rad)
@@ -186,6 +189,19 @@ class TFManager:
                 ee_xyz_m,
                 ee_relative_in_base,
             )
+        )
+
+    def camera_vector_to_base_offset(
+        self,
+        camera_vector_m: Vector3,
+        ee_yaw_deg: float,
+        ee_quaternion_xyzw: Quaternion | None = None,
+    ) -> Vector3:
+        ee_relative_vector = self.camera_vector_to_ee_vector(camera_vector_m)
+        return self.ee_relative_xyz_to_base_offset(
+            ee_relative_vector,
+            ee_yaw_deg,
+            ee_quaternion_xyzw,
         )
 
     def ee_relative_xyz_to_base_offset(

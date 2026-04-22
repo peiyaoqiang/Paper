@@ -35,6 +35,25 @@ class OpenVLAWrapper:
             return self._predict_action_remote(observation)
         return self._predict_action_mock(observation)
 
+    def check_remote_health(self) -> tuple[bool, str]:
+        if self.config.mode != "remote_api":
+            return (True, "OpenVLA is not using remote_api mode.")
+        if not self.config.remote_url:
+            return (False, "OpenVLA remote_api mode requires `remote_url` to be set.")
+
+        health_url = self.config.remote_url
+        if health_url.endswith("/predict"):
+            health_url = health_url[: -len("/predict")] + "/health"
+
+        http_request = request.Request(health_url, method="GET")
+        try:
+            with request.urlopen(http_request, timeout=min(self.config.remote_timeout_s, 5.0)) as response:
+                body = response.read().decode("utf-8", errors="replace")
+        except error.URLError as exc:
+            return (False, f"OpenVLA health check failed for {health_url}: {exc}")
+
+        return (True, body or f"OpenVLA health endpoint reachable: {health_url}")
+
     def _predict_action_mock(self, observation: Observation) -> PolicyAction:
         instruction = observation.instruction.lower()
         is_pick = "pick" in instruction or "grasp" in instruction
@@ -90,7 +109,10 @@ class OpenVLAWrapper:
             with request.urlopen(http_request, timeout=self.config.remote_timeout_s) as response:
                 body = response.read().decode("utf-8")
         except error.URLError as exc:
-            raise RuntimeError(f"OpenVLA remote request failed: {exc}") from exc
+            raise RuntimeError(
+                f"OpenVLA remote request failed: {exc}. "
+                f"Expected service at {url}. Check the remote server and local port-forward."
+            ) from exc
 
         parsed = json.loads(body)
         if not isinstance(parsed, Mapping):
