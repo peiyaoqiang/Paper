@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 import time
 
 from common.types import CameraFrame
@@ -11,13 +12,11 @@ from PIL import Image
 
 try:
     import rclpy
-    from cv_bridge import CvBridge
     from rclpy.node import Node
     from sensor_msgs.msg import CameraInfo
     from sensor_msgs.msg import Image as ROSImage
 except ImportError:  # pragma: no cover - depends on ROS2 runtime
     rclpy = None
-    CvBridge = None
     Node = object
     CameraInfo = object
     ROSImage = object
@@ -39,7 +38,6 @@ class RealSenseConfig:
 class _RealSenseROSSubscriber(Node):
     def __init__(self, config: RealSenseConfig) -> None:
         super().__init__(config.ros_node_name)
-        self.bridge = CvBridge()
         self.latest_rgb: np.ndarray | None = None
         self.latest_depth: np.ndarray | None = None
         self.latest_camera_info: CameraInfo | None = None
@@ -49,13 +47,76 @@ class _RealSenseROSSubscriber(Node):
         self.create_subscription(CameraInfo, config.camera_info_topic, self._on_camera_info, 10)
 
     def _on_color(self, msg: ROSImage) -> None:
-        self.latest_rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding="rgb8")
+        self.latest_rgb = ros_image_to_rgb(msg)
 
     def _on_depth(self, msg: ROSImage) -> None:
-        self.latest_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        self.latest_depth = ros_image_to_depth(msg)
 
     def _on_camera_info(self, msg: CameraInfo) -> None:
         self.latest_camera_info = msg
+
+
+def ros_image_to_rgb(msg: ROSImage) -> np.ndarray:
+    encoding = msg.encoding.lower()
+    height = int(msg.height)
+    width = int(msg.width)
+    step = int(msg.step)
+    raw = np.frombuffer(msg.data, dtype=np.uint8)
+
+    if encoding in ("rgb8", "bgr8"):
+        row_width = width * 3
+        image = raw.reshape(height, step)[:, :row_width].reshape(height, width, 3)
+        if encoding == "bgr8":
+            image = image[:, :, ::-1]
+        return image.copy()
+
+    if encoding in ("rgba8", "bgra8"):
+        row_width = width * 4
+        image = raw.reshape(height, step)[:, :row_width].reshape(height, width, 4)
+        if encoding == "bgra8":
+            image = image[:, :, [2, 1, 0, 3]]
+        return image[:, :, :3].copy()
+
+    if encoding in ("mono8", "8uc1"):
+        image = raw.reshape(height, step)[:, :width].reshape(height, width)
+        return np.repeat(image[:, :, None], 3, axis=2).copy()
+
+    raise ValueError(f"Unsupported ROS color image encoding: {msg.encoding}")
+
+
+def ros_image_to_depth(msg: ROSImage) -> np.ndarray:
+    encoding = msg.encoding.lower()
+    height = int(msg.height)
+    width = int(msg.width)
+    step = int(msg.step)
+
+    if encoding in ("16uc1", "mono16"):
+        depth = _ros_image_to_2d_array(msg, np.uint16, height, width, step)
+    elif encoding == "32fc1":
+        depth = _ros_image_to_2d_array(msg, np.float32, height, width, step)
+    elif encoding in ("8uc1", "mono8"):
+        depth = _ros_image_to_2d_array(msg, np.uint8, height, width, step)
+    else:
+        raise ValueError(f"Unsupported ROS depth image encoding: {msg.encoding}")
+
+    return depth.copy()
+
+
+def _ros_image_to_2d_array(
+    msg: ROSImage,
+    dtype: type[np.generic],
+    height: int,
+    width: int,
+    step: int,
+) -> np.ndarray:
+    itemsize = np.dtype(dtype).itemsize
+    row_items = step // itemsize
+    image = np.frombuffer(msg.data, dtype=dtype).reshape(height, row_items)[:, :width]
+    msg_big_endian = bool(msg.is_bigendian)
+    host_big_endian = sys.byteorder == "big"
+    if msg_big_endian != host_big_endian and itemsize > 1:
+        image = image.byteswap()
+    return image
 
 
 class RealSenseDriver:
@@ -79,9 +140,9 @@ class RealSenseDriver:
             self._init_ros2()
 
     def _init_ros2(self) -> None:
-        if rclpy is None or CvBridge is None:
+        if rclpy is None:
             raise RuntimeError(
-                "ROS2 RealSense mode requires `rclpy`, `sensor_msgs`, and `cv_bridge` to be installed."
+                "ROS2 RealSense mode requires `rclpy` and `sensor_msgs` to be installed."
             )
         if not rclpy.ok():
             rclpy.init(args=None)

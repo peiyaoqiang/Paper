@@ -18,6 +18,7 @@ class OpenVLAConfig:
     remote_timeout_s: float = 10.0
     unnorm_key: str = "libero_spatial"
     image_input_key: str = "wrist_image"
+    remote_action_gripper_semantics: str = "open_high"
 
 
 class OpenVLAWrapper:
@@ -130,7 +131,7 @@ class OpenVLAWrapper:
                 raise RuntimeError("OpenVLA remote `action` must contain at least 7 elements.")
             delta_xyz_m = tuple(float(v) for v in action[:3])
             delta_yaw_deg = float(action[5])
-            gripper_command = "close" if float(action[6]) > 0.5 else "open"
+            gripper_command = self._gripper_command_from_action_value(float(action[6]))
         else:
             delta_xyz_raw = response.get("delta_xyz_m", (0.0, 0.0, 0.0))
             if not isinstance(delta_xyz_raw, Sequence) or len(delta_xyz_raw) != 3:
@@ -160,10 +161,20 @@ class OpenVLAWrapper:
         observation: Observation,
     ) -> tuple[int, int] | None:
         if raw_target_pixel is None:
-            return (observation.frame.width // 2, observation.frame.height // 2)
+            return None
         if not isinstance(raw_target_pixel, Sequence) or len(raw_target_pixel) != 2:
             raise RuntimeError("OpenVLA remote `target_pixel` must contain exactly 2 elements.")
         return (int(raw_target_pixel[0]), int(raw_target_pixel[1]))
+
+    def _gripper_command_from_action_value(self, value: float) -> str:
+        semantics = self.config.remote_action_gripper_semantics.strip().lower()
+        if semantics == "open_high":
+            return "open" if value > 0.5 else "close"
+        if semantics == "close_high":
+            return "close" if value > 0.5 else "open"
+        raise RuntimeError(
+            "OpenVLA remote_action_gripper_semantics must be either `open_high` or `close_high`."
+        )
 
     def _maybe_base64_file(self, path_hint: str) -> str | None:
         path = Path(path_hint)
@@ -179,6 +190,8 @@ class OpenVLAWrapper:
             "total_ms",
             "model_name",
             "image_size",
+            "preprocess_profile",
+            "unnorm_key_used",
             "server_timestamp_utc",
         ):
             if key in response:

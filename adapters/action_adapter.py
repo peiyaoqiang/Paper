@@ -15,6 +15,7 @@ class ActionAdapterConfig:
     max_rotation_step_deg: float
     workspace_xyz_min: Vector3
     workspace_xyz_max: Vector3
+    safety_clipping_enabled: bool = True
     workspace_enforced: bool = True
 
 
@@ -78,20 +79,25 @@ class ActionAdapter:
         return (tuple(clipped_values), clipped)
 
     def adapt(self, action: PolicyAction, robot_state: RobotState | None = None) -> SafeAction:
-        delta_xyz_m, clipped_xyz_step = self._clip_delta(action.delta_xyz_m)
+        if self.config.safety_clipping_enabled:
+            delta_xyz_m, clipped_xyz_step = self._clip_delta(action.delta_xyz_m)
+        else:
+            delta_xyz_m = action.delta_xyz_m
+            clipped_xyz_step = False
         delta_xyz_m, clipped_xyz_workspace = self._clip_to_workspace(delta_xyz_m, robot_state)
         delta_yaw_deg = action.delta_yaw_deg
         clipped_yaw = False
-        if delta_yaw_deg > self.config.max_rotation_step_deg:
-            delta_yaw_deg = self.config.max_rotation_step_deg
-            clipped_yaw = True
-        elif delta_yaw_deg < -self.config.max_rotation_step_deg:
-            delta_yaw_deg = -self.config.max_rotation_step_deg
-            clipped_yaw = True
+        if self.config.safety_clipping_enabled:
+            if delta_yaw_deg > self.config.max_rotation_step_deg:
+                delta_yaw_deg = self.config.max_rotation_step_deg
+                clipped_yaw = True
+            elif delta_yaw_deg < -self.config.max_rotation_step_deg:
+                delta_yaw_deg = -self.config.max_rotation_step_deg
+                clipped_yaw = True
 
         clipped = clipped_xyz_step or clipped_xyz_workspace or clipped_yaw
         if clipped_xyz_workspace:
-            rejection_reason = "Action clipped to workspace and safety limits"
+            rejection_reason = "Action clipped to workspace limits"
         elif clipped:
             rejection_reason = "Action clipped to safety limits"
         else:

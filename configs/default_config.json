@@ -85,7 +85,8 @@
     "remote_url": "http://127.0.0.1:8000/predict",
     "remote_timeout_s": 120.0,
     "unnorm_key": "libero_spatial",
-    "image_input_key": "wrist_image"
+    "image_input_key": "wrist_image",
+    "remote_action_gripper_semantics": "open_high"
   },
   "logging": {
     "enabled": true,

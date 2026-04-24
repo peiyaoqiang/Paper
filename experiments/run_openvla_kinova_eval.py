@@ -30,7 +30,7 @@ def load_config() -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Route-A OpenVLA on Kinova: execute OpenVLA actions directly with safety clipping only."
+        description="Route-A OpenVLA on Kinova: execute OpenVLA actions directly."
     )
     parser.add_argument("--instruction", type=str, default="", help="Override default instruction.")
     parser.add_argument("--steps", type=int, default=20, help="Maximum number of OpenVLA steps to execute.")
@@ -74,6 +74,14 @@ def parse_args() -> argparse.Namespace:
         "--observe-only-no-close",
         action="store_true",
         help="Debug mode: never close the gripper even if policy asks to close.",
+    )
+    parser.add_argument(
+        "--approach-only",
+        action="store_true",
+        help=(
+            "Run OpenVLA closed-loop approach only: ignore all gripper outputs, never connect or close "
+            "the external gripper, and optionally stop from monitor thresholds."
+        ),
     )
     parser.add_argument(
         "--monitor-assisted-grasp",
@@ -133,6 +141,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="Override ActionAdapter/Kinova per-step yaw limit.",
+    )
+    parser.add_argument(
+        "--disable-safety-clipping",
+        action="store_true",
+        help="Execute adapted OpenVLA xyz/yaw without per-step translation or yaw clipping.",
     )
     parser.add_argument(
         "--twist-command-duration-s",
@@ -391,6 +404,7 @@ def _build_policy(config: dict) -> OpenVLAWrapper:
             remote_timeout_s=config["policy"]["remote_timeout_s"],
             unnorm_key=config["policy"]["unnorm_key"],
             image_input_key=config["policy"]["image_input_key"],
+            remote_action_gripper_semantics=config["policy"].get("remote_action_gripper_semantics", "open_high"),
         )
     )
 
@@ -402,9 +416,22 @@ def main() -> None:
     instruction = args.instruction.strip() or config["task"]["instruction"]
     lift_height_m = args.lift_height_m if args.lift_height_m is not None else config["task"]["lift_height_m"]
 
+    if args.approach_only:
+        args.policy_gripper_mode = "ignore"
+        args.observe_only_no_close = True
+        args.monitor_assisted_grasp = False
+        args.close_on_policy_step = False
+
     camera = _build_camera(config)
     robot = _build_robot(config, args)
-    gripper = _build_gripper(config, robot)
+    needs_gripper = (
+        not args.observe_only_no_close
+        and (
+            args.policy_gripper_mode != "ignore"
+            or args.monitor_assisted_grasp
+        )
+    )
+    gripper: GripperDriver | None = _build_gripper(config, robot) if needs_gripper else None
     policy = _build_policy(config)
     action_adapter = ActionAdapter(
         ActionAdapterConfig(
@@ -412,6 +439,7 @@ def main() -> None:
             max_rotation_step_deg=robot.config.max_rotation_step_deg,
             workspace_xyz_min=tuple(config["robot"]["workspace_xyz_min"]),
             workspace_xyz_max=tuple(config["robot"]["workspace_xyz_max"]),
+            safety_clipping_enabled=not args.disable_safety_clipping,
             workspace_enforced=config["robot"].get("workspace_enforced", True),
         )
     )
@@ -420,8 +448,10 @@ def main() -> None:
     print("Requested policy steps:", args.steps)
     print("Policy mode:", config["policy"]["mode"])
     print("Policy remote URL:", config["policy"]["remote_url"])
+    print("Approach only:", args.approach_only)
     print("Policy gripper mode:", args.policy_gripper_mode)
     print("Observe only no close:", args.observe_only_no_close)
+    print("External gripper connected:", gripper is not None)
     print("Monitor assisted grasp:", args.monitor_assisted_grasp)
     print("Monitor grasp center below px:", args.monitor_grasp_center_below_px)
     print("Monitor grasp stable steps:", args.monitor_grasp_stable_steps)
@@ -435,6 +465,7 @@ def main() -> None:
     print("Stop when monitor center worsens n steps:", args.stop_when_monitor_center_worsens_n_steps)
     print("Max translation step m:", robot.config.max_translation_step_m)
     print("Max rotation step deg:", robot.config.max_rotation_step_deg)
+    print("Safety clipping enabled:", not args.disable_safety_clipping)
     print("Twist command frame:", robot.config.twist_command_frame)
     print("Policy axis order:", args.policy_axis_order)
     print("Policy overall scale:", args.policy_overall_scale)
@@ -483,7 +514,7 @@ def main() -> None:
         if not remote_ok:
             raise RuntimeError(remote_message)
 
-        if not args.skip_initial_open and args.policy_gripper_mode != "ignore":
+        if not args.skip_initial_open and gripper is not None and args.policy_gripper_mode != "ignore":
             open_success = gripper.open()
             print("Initial gripper open success:", open_success)
             if not open_success:
@@ -532,7 +563,7 @@ def main() -> None:
                 f" delta_yaw_deg={adapted_policy_action.delta_yaw_deg:+.3f}"
             )
             print(
-                "  安全动作 "
+                "  执行动作 "
                 f"delta_xyz_m={_fmt_vector(safe_action.delta_xyz_m)}"
                 f" delta_yaw_deg={safe_action.delta_yaw_deg:+.3f}"
             )
@@ -549,6 +580,8 @@ def main() -> None:
                 and raw_policy_action.gripper_command == "open"
                 and not args.observe_only_no_close
             ):
+                if gripper is None:
+                    raise RuntimeError("Gripper command requested but external gripper is not connected.")
                 gripper.open()
                 executed_gripper_command = "open"
 
@@ -609,6 +642,8 @@ def main() -> None:
                 if args.observe_only_no_close:
                     print("  抓取触发到了，但当前是 observe-only，不执行夹爪闭合。")
                 else:
+                    if gripper is None:
+                        raise RuntimeError("Monitor-assisted close requested but external gripper is not connected.")
                     if args.settle_before_close_s > 0.0:
                         time.sleep(args.settle_before_close_s)
                     close_success = gripper.close()
@@ -658,6 +693,8 @@ def main() -> None:
                 if args.observe_only_no_close:
                     print("  Policy要求闭合，但当前是 observe-only，不执行夹爪闭合。")
                 else:
+                    if gripper is None:
+                        raise RuntimeError("Policy close requested but external gripper is not connected.")
                     if args.settle_before_close_s > 0.0:
                         time.sleep(args.settle_before_close_s)
                     close_success = gripper.close()
@@ -828,6 +865,7 @@ def main() -> None:
                 final_robot_state=final_state,
                 metadata={
                     "test_type": "openvla_kinova_eval",
+                    "approach_only": args.approach_only,
                     "requested_steps": args.steps,
                     "policy_mode": config["policy"]["mode"],
                     "policy_remote_url": config["policy"]["remote_url"],
@@ -871,7 +909,8 @@ def main() -> None:
             )
             print("  trial_log:", trial_logger.log_path)
     finally:
-        gripper.shutdown()
+        if gripper is not None:
+            gripper.shutdown()
 
 
 if __name__ == "__main__":

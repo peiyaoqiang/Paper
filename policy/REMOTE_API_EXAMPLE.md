@@ -36,7 +36,8 @@ Set the `policy` section in `configs/default_config.json` like this:
   "remote_url": "http://YOUR_SERVER_IP:8000/predict",
   "remote_timeout_s": 10.0,
   "unnorm_key": "libero_spatial",
-  "image_input_key": "wrist_image"
+  "image_input_key": "wrist_image",
+  "remote_action_gripper_semantics": "open_high"
 }
 ```
 
@@ -127,15 +128,19 @@ Interpretation in the current local wrapper:
 
 - `action[0:3]` -> `delta_xyz_m`
 - `action[5]` -> `delta_yaw_deg`
-- `action[6] > 0.5` -> `gripper_command = "close"`
-- otherwise -> `gripper_command = "open"`
+- if `remote_action_gripper_semantics = "open_high"`:
+  `action[6] > 0.5` -> `gripper_command = "open"`
+- if `remote_action_gripper_semantics = "close_high"`:
+  `action[6] > 0.5` -> `gripper_command = "close"`
 
 当前本地 wrapper 的解析方式：
 
 - `action[0:3]` 对应 `delta_xyz_m`
 - `action[5]` 对应 `delta_yaw_deg`
-- `action[6] > 0.5` 时视为 `gripper_command = "close"`
-- 否则视为 `gripper_command = "open"`
+- 当 `remote_action_gripper_semantics = "open_high"` 时：
+  `action[6] > 0.5` 视为 `gripper_command = "open"`
+- 当 `remote_action_gripper_semantics = "close_high"` 时：
+  `action[6] > 0.5` 视为 `gripper_command = "close"`
 
 ### Style B / 风格 B
 

@@ -98,6 +98,7 @@ def main() -> None:
             remote_timeout_s=config["policy"]["remote_timeout_s"],
             unnorm_key=config["policy"]["unnorm_key"],
             image_input_key=config["policy"]["image_input_key"],
+            remote_action_gripper_semantics=config["policy"].get("remote_action_gripper_semantics", "open_high"),
         )
     )
     action_adapter = ActionAdapter(

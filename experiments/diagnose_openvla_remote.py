@@ -106,6 +106,7 @@ def _build_policy(config: dict, args: argparse.Namespace) -> OpenVLAWrapper:
             image_input_key=(
                 args.image_input_key if args.image_input_key is not None else config["policy"]["image_input_key"]
             ),
+            remote_action_gripper_semantics=config["policy"].get("remote_action_gripper_semantics", "open_high"),
         )
     )
 
