@@ -31,6 +31,7 @@ class TeleopCollector:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         dry_run = config.hardware.dry_run
+
         self.dt = 1.0 / config.control.hz
         self.mode = CollectorMode.NOT_RECORDING
         self.episode_index = self._next_episode_index()
@@ -45,6 +46,7 @@ class TeleopCollector:
             serial=config.camera.serial,
             dry_run=dry_run,
         )
+
         self.robot = KinovaRobot(
             ip=config.kinova.ip,
             username=config.kinova.username,
@@ -62,6 +64,7 @@ class TeleopCollector:
             twist_publish_rate_hz=config.kinova.twist_publish_rate_hz,
             twist_stop_duration_s=config.kinova.twist_stop_duration_s,
         )
+
         self.gripper = ModbusGripper(
             host=config.gripper.host,
             port=config.gripper.port,
@@ -85,6 +88,7 @@ class TeleopCollector:
             open_timeout_s=config.gripper.open_timeout_s,
             close_timeout_s=config.gripper.close_timeout_s,
         )
+
         self.xbox = XboxController(
             device_index=config.xbox.device_index,
             deadzone=config.control.deadzone,
@@ -94,6 +98,7 @@ class TeleopCollector:
             debug=config.xbox.debug,
             dry_run_mode=config.xbox.dry_run_mode,  # type: ignore[arg-type]
         )
+
         self.recorder = EpisodeRecorder(
             dataset_root=config.dataset.root,
             task_name=config.task.name,
@@ -102,6 +107,7 @@ class TeleopCollector:
             camera_name=config.dataset.camera,
             control_hz=config.control.hz,
         )
+
         workspace = config.control.workspace
         self.safety = SafetyLimiter(
             max_delta_m=config.control.max_delta_m,
@@ -118,35 +124,46 @@ class TeleopCollector:
     def run(self) -> None:
         self._connect()
         self.running = True
+
         print(
             "Collector ready: Start=record, A=save success, "
             "B=save failure, Back=stop."
         )
+
         next_tick = time.monotonic()
+
         try:
             while self.running:
                 loop_start = time.monotonic()
+
                 self._run_one_step()
                 self._update_fps(loop_start)
+
                 next_tick += self.dt
                 sleep_s = next_tick - time.monotonic()
+
                 if sleep_s > 0.0:
                     time.sleep(sleep_s)
                 else:
                     next_tick = time.monotonic()
+
         except KeyboardInterrupt:
             print("Interrupted by user.")
+
         except Exception:
             self._emergency_cleanup()
             raise
+
         finally:
             self._shutdown()
 
     def _run_one_step(self) -> None:
         image = self.camera.get_rgb()
+
         state = self.robot.get_state()
         state = state.copy()
         state[6] = self.gripper.get_position()
+
         raw_action, buttons = self.xbox.read()
         action = self.safety.limit_action(raw_action, current_position=state[:3])
 
@@ -157,10 +174,21 @@ class TeleopCollector:
             return
 
         if self.mode is CollectorMode.NOT_RECORDING and buttons["start"]:
+            # Every new episode should start from an open-gripper target.
+            #
+            # This is important for training:
+            # before grasp -> action[3] = -1.0
+            # after RT     -> action[3] = +1.0
+            #
+            # Without this reset, the persistent gripper target could carry over
+            # from the previous episode.
+            self.xbox.reset_gripper_target(-1.0)
+
             self.episode_index = self._next_episode_index()
             episode_dir = self.recorder.start_episode(self.episode_index)
             self.current_episode_steps = 0
             self.mode = CollectorMode.RECORDING
+
             print(f"Started episode_{self.episode_index:06d}: {episode_dir}")
 
         if self.mode is CollectorMode.RECORDING:
@@ -193,8 +221,10 @@ class TeleopCollector:
                 "max_steps": self.config.control.max_steps,
             },
         )
+
         label = "success" if success else "failure"
         print(f"Saved {label} episode_{self.episode_index:06d}: {episode_dir} reason={reason}")
+
         self.mode = CollectorMode.NOT_RECORDING
         self.current_episode_steps = 0
         self.episode_index = self._next_episode_index()
@@ -211,26 +241,32 @@ class TeleopCollector:
                 self._save_current_episode(success=False, reason="shutdown_while_recording")
             except Exception as exc:
                 print(f"Warning: failed to save active episode during shutdown: {exc}")
+
         try:
             self.robot.stop()
         except Exception as exc:
             print(f"Warning: robot.stop() failed: {exc}")
+
         try:
             self.gripper.hold()
         except Exception as exc:
             print(f"Warning: gripper.hold() failed: {exc}")
+
         try:
             self.xbox.disconnect()
         except Exception as exc:
             print(f"Warning: xbox.disconnect() failed: {exc}")
+
         try:
             self.gripper.disconnect()
         except Exception as exc:
             print(f"Warning: gripper.disconnect() failed: {exc}")
+
         try:
             self.camera.stop()
         except Exception as exc:
             print(f"Warning: camera.stop() failed: {exc}")
+
         try:
             self.robot.disconnect()
         except Exception as exc:
@@ -241,10 +277,12 @@ class TeleopCollector:
             self.robot.stop()
         except Exception as exc:
             print(f"Emergency cleanup warning: robot.stop() failed: {exc}")
+
         try:
             self.gripper.hold()
         except Exception as exc:
             print(f"Emergency cleanup warning: gripper.hold() failed: {exc}")
+
         try:
             self.camera.stop()
         except Exception as exc:
@@ -253,17 +291,26 @@ class TeleopCollector:
     def _update_fps(self, loop_start: float) -> None:
         if self.stats.last_loop_time > 0.0:
             period = loop_start - self.stats.last_loop_time
+
             if period > 1e-6:
                 instant_fps = 1.0 / period
-                self.stats.fps = instant_fps if self.stats.fps <= 0.0 else 0.8 * self.stats.fps + 0.2 * instant_fps
+                self.stats.fps = (
+                    instant_fps
+                    if self.stats.fps <= 0.0
+                    else 0.8 * self.stats.fps + 0.2 * instant_fps
+                )
+
         self.stats.last_loop_time = loop_start
 
     def _print_status(self, action: object) -> None:
         now = time.monotonic()
+
         if now - self.stats.last_print_time < 0.5:
             return
+
         self.stats.last_print_time = now
         recording = self.mode is CollectorMode.RECORDING
+
         print(
             f"episode={self.episode_index:06d} "
             f"mode={'recording' if recording else 'not_recording'} "
@@ -276,8 +323,10 @@ class TeleopCollector:
     def _next_episode_index(self) -> int:
         task_dir = self.config.dataset.root / self.config.task.name
         index = 0
+
         while (task_dir / f"episode_{index:06d}").exists():
             index += 1
+
         return index
 
 
@@ -289,8 +338,10 @@ def main(argv: list[str] | None = None) -> None:
         default=Path("configs/collect_pick_red_block.yaml"),
         help="Path to collection YAML config.",
     )
+
     args = parser.parse_args(argv)
     config = load_config(args.config)
+
     TeleopCollector(config).run()
 
 
