@@ -8,7 +8,10 @@ The first task is `pick up the red ball`. The raw action is:
 action = [dx, dy, dz, gripper]
 ```
 
-where `dx/dy/dz` are end-effector delta translations in meters per control step, and `gripper` is `-1` open, `0` hold, `+1` close.
+where `dx/dy/dz` are end-effector delta translations in meters per 
+
+
+ step, and `gripper` is `-1` open, `0` hold, `+1` close.
 
 ## Install
 
