@@ -9,7 +9,10 @@ dataset:
 
 control:
   hz: 5.0
-  max_delta_m: 0.01
+  action_dim: 7
+  max_delta_m: 0.03
+  # 40 degrees per control step, in radians.
+  max_delta_rad: 0.69813170
   deadzone: 0.12
   allow_motion_when_not_recording: true
   max_steps: 500
@@ -28,12 +31,19 @@ xbox:
   device_index: 0
   debug: false
   dry_run_mode: scripted
+  # New full training collection should use action semantics:
+  #   LT pressed -> -1 open
+  #   RT pressed -> +1 close
+  #   released   ->  0 hold
+  # The old test dataset used persistent_target, which produced no hold actions.
+  gripper_action_mode: hold_on_release
   mapping:
     axes:
       left_x: 0
       left_y: 1
+      # Your controller reports right-stick horizontal on axis 3.
+      right_x: 3
       # Your controller reports right-stick vertical on axis 4.
-      # Axis 3 is right-stick horizontal on this machine.
       right_y: 4
       # Your controller reports LT/RT on axes 2/5.
       lt: 2
@@ -43,9 +53,15 @@ xbox:
       dx: -1.0
       dy: -1.0
       dz: -1.0
+      droll: -1.0
+      dpitch: -1.0
+      dyaw: -1.0
     buttons:
       success: 0
       abort: 1
+      # LB/RB rotate roll. D-pad up/down rotates pitch.
+      roll_negative: 4
+      roll_positive: 5
       stop: 6
       start: 7
 
@@ -64,7 +80,7 @@ kinova:
   ip: 192.168.1.10
   username: admin
   password: admin
-  max_linear_speed: 0.0125
+  max_linear_speed: 0.06
   max_translation_step_m: 0.015
   max_rotation_step_deg: 2.0
   joint_state_topic: /joint_states

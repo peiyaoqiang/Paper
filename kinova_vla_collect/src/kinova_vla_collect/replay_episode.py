@@ -36,8 +36,8 @@ def load_episode(episode_dir: Path) -> tuple[dict[str, Any], FloatArray]:
     finally:
         steps.close()
 
-    if actions.ndim != 2 or actions.shape[1] != 4:
-        raise ValueError(f"Expected actions shape [T, 4], got {actions.shape}")
+    if actions.ndim != 2 or actions.shape[1] not in {4, 7}:
+        raise ValueError(f"Expected actions shape [T, 4] or [T, 7], got {actions.shape}")
     return meta, actions
 
 
@@ -118,11 +118,12 @@ def replay_episode(
         next_tick = time.monotonic()
         for step_index, action in enumerate(scaled_actions):
             robot.step_delta_action(action, dt)
-            gripper.apply_action(float(action[3]))
+            gripper_index = _gripper_index(action.shape[0])
+            gripper.apply_action(float(action[gripper_index]))
             if step_index % max(1, int(control_hz)) == 0:
                 print(
                     f"step={step_index:06d}/{len(scaled_actions):06d} "
-                    f"action={action.tolist()} gripper={float(action[3]):+.1f}"
+                    f"action={action.tolist()} gripper={float(action[gripper_index]):+.1f}"
                 )
             next_tick += dt
             sleep_s = next_tick - time.monotonic()
@@ -186,7 +187,8 @@ def print_action_stats(prefix: str, actions: FloatArray) -> None:
     if actions.size == 0:
         print(f"{prefix}: empty")
         return
-    labels = ["dx", "dy", "dz", "gripper"]
+    labels = _action_labels(actions.shape[1])
+    gripper_index = _gripper_index(actions.shape[1])
     mins = actions.min(axis=0)
     maxs = actions.max(axis=0)
     means = actions.mean(axis=0)
@@ -197,7 +199,7 @@ def print_action_stats(prefix: str, actions: FloatArray) -> None:
             f"    {label}: min={float(mins[index]):+.6f} max={float(maxs[index]):+.6f} "
             f"mean={float(means[index]):+.6f} std={float(stds[index]):.6f}"
         )
-    gripper = actions[:, 3]
+    gripper = actions[:, gripper_index]
     total = max(1, actions.shape[0])
     print(
         "    gripper ratio: "
@@ -213,6 +215,22 @@ def confirm_replay() -> bool:
         "after verifying the initial pose is safe: "
     )
     return answer.strip().lower() == "yes"
+
+
+def _gripper_index(action_dim: int) -> int:
+    if action_dim == 7:
+        return 6
+    if action_dim == 4:
+        return 3
+    raise ValueError(f"Unsupported action_dim={action_dim}; expected 4 or 7")
+
+
+def _action_labels(action_dim: int) -> list[str]:
+    if action_dim == 7:
+        return ["dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper"]
+    if action_dim == 4:
+        return ["dx", "dy", "dz", "gripper"]
+    return [f"action_{index}" for index in range(action_dim)]
 
 
 def main(argv: list[str] | None = None) -> None:

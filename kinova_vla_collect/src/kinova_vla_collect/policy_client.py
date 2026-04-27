@@ -53,7 +53,7 @@ class PolicyClient:
                 "state": np.asarray(robot_state, dtype=np.float32).tolist(),
             },
             "task": task_prompt,
-            "action_definition": "[dx, dy, dz, gripper]",
+            "action_definition": "[dx, dy, dz, droll, dpitch, dyaw, gripper]",
         }
         response = self._post_json(payload)
         return self._parse_actions(response)
@@ -99,10 +99,10 @@ class PolicyClient:
             candidate = response
 
         actions = np.asarray(candidate, dtype=np.float32)
-        if actions.shape == (4,):
+        if actions.shape == (7,):
             actions = actions[None, :]
-        if actions.ndim != 2 or actions.shape[1] != 4:
-            raise RuntimeError(f"Policy action must have shape (4,) or (T, 4), got {actions.shape}")
+        if actions.ndim != 2 or actions.shape[1] != 7:
+            raise RuntimeError(f"Policy action must have shape (7,) or (T, 7), got {actions.shape}")
         if not np.all(np.isfinite(actions)):
             raise RuntimeError("Policy action contains NaN or Inf")
         return actions.astype(np.float32)
@@ -122,4 +122,4 @@ class PolicyClient:
         dy = 0.001 * math.cos(phase)
         dz = 0.0
         gripper = 0.0
-        return np.array([[dx, dy, dz, gripper]], dtype=np.float32)
+        return np.array([[dx, dy, dz, 0.0, 0.0, 0.0, gripper]], dtype=np.float32)

@@ -12,12 +12,14 @@ from numpy.typing import NDArray
 FloatArray = NDArray[np.float32]
 ButtonDict = dict[str, bool]
 DryRunMode = Literal["keyboard", "random", "scripted"]
+GripperActionMode = Literal["hold_on_release", "persistent_target"]
 
 
 @dataclass(frozen=True)
 class AxisMapping:
     left_x: int = 0
     left_y: int = 1
+    right_x: int = 3
     right_y: int = 4
     lt: int = 2
     rt: int = 5
@@ -28,12 +30,17 @@ class ActionSigns:
     dx: float = -1.0
     dy: float = -1.0
     dz: float = -1.0
+    droll: float = 1.0
+    dpitch: float = 1.0
+    dyaw: float = 1.0
 
 
 @dataclass(frozen=True)
 class ButtonMapping:
     success: int = 0
     abort: int = 1
+    roll_negative: int = 4
+    roll_positive: int = 5
     stop: int = 6
     start: int = 7
 
@@ -64,6 +71,7 @@ class XboxMapping:
             axes=AxisMapping(
                 left_x=int(axes.get("left_x", AxisMapping.left_x)),
                 left_y=int(axes.get("left_y", AxisMapping.left_y)),
+                right_x=int(axes.get("right_x", AxisMapping.right_x)),
                 right_y=int(axes.get("right_y", AxisMapping.right_y)),
                 lt=int(axes.get("lt", AxisMapping.lt)),
                 rt=int(axes.get("rt", AxisMapping.rt)),
@@ -72,10 +80,15 @@ class XboxMapping:
                 dx=float(signs.get("dx", ActionSigns.dx)),
                 dy=float(signs.get("dy", ActionSigns.dy)),
                 dz=float(signs.get("dz", ActionSigns.dz)),
+                droll=float(signs.get("droll", ActionSigns.droll)),
+                dpitch=float(signs.get("dpitch", ActionSigns.dpitch)),
+                dyaw=float(signs.get("dyaw", ActionSigns.dyaw)),
             ),
             buttons=ButtonMapping(
                 success=int(buttons.get("success", ButtonMapping.success)),
                 abort=int(buttons.get("abort", ButtonMapping.abort)),
+                roll_negative=int(buttons.get("roll_negative", ButtonMapping.roll_negative)),
+                roll_positive=int(buttons.get("roll_positive", ButtonMapping.roll_positive)),
                 stop=int(buttons.get("stop", ButtonMapping.stop)),
                 start=int(buttons.get("start", ButtonMapping.start)),
             ),
@@ -88,34 +101,46 @@ class XboxController:
         device_index: int = 0,
         deadzone: float = 0.12,
         max_delta_m: float = 0.005,
+        max_delta_rad: float = 0.034906585,
+        action_dim: int = 7,
         dry_run: bool = False,
         mapping: XboxMapping | dict[str, Any] | None = None,
         debug: bool = False,
         dry_run_mode: DryRunMode = "keyboard",
+        gripper_action_mode: GripperActionMode = "hold_on_release",
         random_seed: int | None = None,
     ) -> None:
         self.device_index = device_index
         self.deadzone = deadzone
         self.max_delta_m = max_delta_m
+        self.max_delta_rad = max_delta_rad
+        if action_dim not in {4, 7}:
+            raise ValueError(f"action_dim must be 4 or 7, got {action_dim}")
+        self.action_dim = action_dim
         self.dry_run = dry_run
         self.mapping = mapping if isinstance(mapping, XboxMapping) else XboxMapping.from_dict(mapping)
         self.debug = debug
         self.dry_run_mode = dry_run_mode
+        if gripper_action_mode not in {"hold_on_release", "persistent_target"}:
+            raise ValueError(
+                "gripper_action_mode must be 'hold_on_release' or 'persistent_target', "
+                f"got {gripper_action_mode!r}"
+            )
+        self.gripper_action_mode = gripper_action_mode
 
         self._pygame: Any | None = None
         self._joystick: Any | None = None
+        self._joystick_instance_id: int | None = None
+        self._last_reconnect_attempt = 0.0
+        self._disconnected_reported = False
         self._dry_counter = 0
         self._rng = random.Random(random_seed)
 
         self._trigger_negative_seen: dict[str, bool] = {"lt": False, "rt": False}
         self._latched_buttons: ButtonDict = self._buttons()
 
-        # Persistent gripper target.
+        # Gripper target used by persistent_target mode.
         # -1.0 = open, 0.0 = hold, +1.0 = close.
-        #
-        # Important:
-        # We intentionally keep this value after LT/RT is released.
-        # This prevents the dataset from becoming almost all gripper=0.0.
         self._gripper_target: float = -1.0
 
     def connect(self) -> None:
@@ -144,24 +169,8 @@ class XboxController:
             self._pygame = pygame
             return
 
-        pygame.joystick.init()
-        joystick_count = pygame.joystick.get_count()
-
-        if joystick_count <= self.device_index:
-            raise RuntimeError(
-                f"No Xbox controller found at index {self.device_index}; "
-                f"pygame sees {joystick_count} joystick(s)"
-            )
-
-        self._joystick = pygame.joystick.Joystick(self.device_index)
-        self._joystick.init()
         self._pygame = pygame
-
-        print(
-            "Connected joystick "
-            f"{self.device_index}: {self._joystick.get_name()} "
-            f"axes={self._joystick.get_numaxes()} buttons={self._joystick.get_numbuttons()}"
-        )
+        self._connect_joystick_or_raise()
 
     def disconnect(self) -> None:
         if self._pygame is not None:
@@ -169,6 +178,7 @@ class XboxController:
 
         self._pygame = None
         self._joystick = None
+        self._joystick_instance_id = None
 
     def reset_gripper_target(self, value: float = -1.0) -> None:
         """Reset persistent gripper target.
@@ -185,10 +195,15 @@ class XboxController:
         if self.dry_run:
             return self._read_dry_run()
 
-        if self._pygame is None or self._joystick is None:
+        if self._pygame is None:
             raise RuntimeError("XboxController is not connected")
 
         self._poll_events()
+        if self._joystick is None:
+            self._try_reconnect_joystick()
+        if self._joystick is None:
+            return self._zero_action(), self._buttons()
+
         axes = self._read_axes()
         buttons = self._read_buttons()
 
@@ -213,18 +228,22 @@ class XboxController:
             print("No joystick connected")
             return
 
-        axis_values = [
-            round(float(self._joystick.get_axis(index)), 4)
-            for index in range(int(self._joystick.get_numaxes()))
-        ]
-        button_values = [
-            int(self._joystick.get_button(index))
-            for index in range(int(self._joystick.get_numbuttons()))
-        ]
-        hat_values = [
-            self._joystick.get_hat(index)
-            for index in range(int(self._joystick.get_numhats()))
-        ]
+        try:
+            axis_values = [
+                round(float(self._joystick.get_axis(index)), 4)
+                for index in range(int(self._joystick.get_numaxes()))
+            ]
+            button_values = [
+                int(self._joystick.get_button(index))
+                for index in range(int(self._joystick.get_numbuttons()))
+            ]
+            hat_values = [
+                self._joystick.get_hat(index)
+                for index in range(int(self._joystick.get_numhats()))
+            ]
+        except Exception as exc:
+            self._mark_joystick_disconnected(f"debug read failed: {exc}")
+            return
 
         print(f"axes={axis_values} buttons={button_values} hats={hat_values}")
 
@@ -237,9 +256,12 @@ class XboxController:
         return {
             "left_x": self._apply_deadzone(self._safe_axis(axes.left_x)),
             "left_y": self._apply_deadzone(self._safe_axis(axes.left_y)),
+            "right_x": self._apply_deadzone(self._safe_axis(axes.right_x)),
             "right_y": self._apply_deadzone(self._safe_axis(axes.right_y)),
             "lt": self._normalize_trigger("lt", self._safe_axis(axes.lt)),
             "rt": self._normalize_trigger("rt", self._safe_axis(axes.rt)),
+            "roll": self._read_roll_axis(),
+            "pitch": self._read_pitch_axis(),
         }
 
     def _read_buttons(self) -> ButtonDict:
@@ -265,6 +287,13 @@ class XboxController:
         for event in self._pygame.event.get():
             if event.type == self._pygame.JOYBUTTONDOWN:
                 self._latch_button(int(event.button))
+            elif event.type == getattr(self._pygame, "JOYDEVICEREMOVED", object()):
+                instance_id = getattr(event, "instance_id", None)
+                if self._joystick_instance_id is None or instance_id == self._joystick_instance_id:
+                    self._mark_joystick_disconnected(f"设备移除 instance_id={instance_id}")
+            elif event.type == getattr(self._pygame, "JOYDEVICEADDED", object()):
+                if self._joystick is None:
+                    self._try_reconnect_joystick(force=True)
             elif event.type == self._pygame.QUIT:
                 self._latched_buttons["stop"] = True
 
@@ -284,39 +313,40 @@ class XboxController:
         lt_pressed = axes["lt"] > 0.2
         rt_pressed = axes["rt"] > 0.2
 
-        # Persistent target-state gripper.
-        #
-        # Old behavior:
-        #   RT pressed -> +1.0
-        #   LT pressed -> -1.0
-        #   released   ->  0.0
-        #
-        # New behavior:
-        #   RT pressed -> target becomes +1.0 and stays +1.0
-        #   LT pressed -> target becomes -1.0 and stays -1.0
-        #   released   -> keep previous target
-        #
-        # This makes the dataset look like:
-        #   before grasp: gripper=-1.0
-        #   after grasp:  gripper=+1.0
-        #
-        # Instead of almost everything being gripper=0.0.
-        if rt_pressed and not lt_pressed:
-            self._gripper_target = 1.0
-        elif lt_pressed and not rt_pressed:
-            self._gripper_target = -1.0
+        gripper_action = self._gripper_axis_action(lt_pressed=lt_pressed, rt_pressed=rt_pressed)
 
         signs = self.mapping.signs
+        translation = [
+            signs.dx * axes["left_y"] * self.max_delta_m,
+            signs.dy * axes["left_x"] * self.max_delta_m,
+            signs.dz * axes["right_y"] * self.max_delta_m,
+        ]
+        if self.action_dim == 4:
+            return np.array([*translation, gripper_action], dtype=np.float32)
 
         return np.array(
             [
-                signs.dx * axes["left_y"] * self.max_delta_m,
-                signs.dy * axes["left_x"] * self.max_delta_m,
-                signs.dz * axes["right_y"] * self.max_delta_m,
-                self._gripper_target,
+                *translation,
+                signs.droll * axes["roll"] * self.max_delta_rad,
+                signs.dpitch * axes["pitch"] * self.max_delta_rad,
+                signs.dyaw * axes["right_x"] * self.max_delta_rad,
+                gripper_action,
             ],
             dtype=np.float32,
         )
+
+    def _gripper_axis_action(self, lt_pressed: bool, rt_pressed: bool) -> float:
+        if rt_pressed and not lt_pressed:
+            if self.gripper_action_mode == "persistent_target":
+                self._gripper_target = 1.0
+            return 1.0
+        if lt_pressed and not rt_pressed:
+            if self.gripper_action_mode == "persistent_target":
+                self._gripper_target = -1.0
+            return -1.0
+        if self.gripper_action_mode == "persistent_target":
+            return self._gripper_target
+        return 0.0
 
     def _read_dry_run(self) -> tuple[FloatArray, ButtonDict]:
         if self.dry_run_mode == "random":
@@ -343,15 +373,19 @@ class XboxController:
         dx = float(keys[self._pygame.K_w] - keys[self._pygame.K_s]) * self.max_delta_m
         dy = float(keys[self._pygame.K_d] - keys[self._pygame.K_a]) * self.max_delta_m
         dz = float(keys[self._pygame.K_r] - keys[self._pygame.K_f]) * self.max_delta_m
+        droll = float(keys[self._pygame.K_o] - keys[self._pygame.K_u]) * self.max_delta_rad
+        dpitch = float(keys[self._pygame.K_i] - keys[self._pygame.K_k]) * self.max_delta_rad
+        dyaw = float(keys[self._pygame.K_l] - keys[self._pygame.K_j]) * self.max_delta_rad
 
-        # Dry-run keyboard gripper is also persistent:
-        # E -> close target, Q -> open target.
-        if keys[self._pygame.K_e]:
-            self._gripper_target = 1.0
-        elif keys[self._pygame.K_q]:
-            self._gripper_target = -1.0
+        gripper_action = self._gripper_axis_action(
+            lt_pressed=bool(keys[self._pygame.K_q]),
+            rt_pressed=bool(keys[self._pygame.K_e]),
+        )
 
-        action = np.array([dx, dy, dz, self._gripper_target], dtype=np.float32)
+        if self.action_dim == 4:
+            action = np.array([dx, dy, dz, gripper_action], dtype=np.float32)
+        else:
+            action = np.array([dx, dy, dz, droll, dpitch, dyaw, gripper_action], dtype=np.float32)
 
         buttons = self._buttons(
             start=bool(keys[self._pygame.K_RETURN]),
@@ -395,19 +429,25 @@ class XboxController:
         if self._joystick is None:
             return 0.0
 
-        if axis_index < 0 or axis_index >= int(self._joystick.get_numaxes()):
+        try:
+            if axis_index < 0 or axis_index >= int(self._joystick.get_numaxes()):
+                return 0.0
+            return float(self._joystick.get_axis(axis_index))
+        except Exception as exc:
+            self._mark_joystick_disconnected(f"axis read failed: {exc}")
             return 0.0
-
-        return float(self._joystick.get_axis(axis_index))
 
     def _safe_button(self, button_index: int) -> bool:
         if self._joystick is None:
             return False
 
-        if button_index < 0 or button_index >= int(self._joystick.get_numbuttons()):
+        try:
+            if button_index < 0 or button_index >= int(self._joystick.get_numbuttons()):
+                return False
+            return bool(self._joystick.get_button(button_index))
+        except Exception as exc:
+            self._mark_joystick_disconnected(f"button read failed: {exc}")
             return False
-
-        return bool(self._joystick.get_button(button_index))
 
     def _apply_deadzone(self, value: float) -> float:
         clipped = float(np.clip(value, -1.0, 1.0))
@@ -427,6 +467,73 @@ class XboxController:
             normalized = raw_value
 
         return float(np.clip(normalized, 0.0, 1.0))
+
+    def _read_roll_axis(self) -> float:
+        buttons = self.mapping.buttons
+        return float(self._safe_button(buttons.roll_positive)) - float(self._safe_button(buttons.roll_negative))
+
+    def _read_pitch_axis(self) -> float:
+        if self._joystick is None:
+            return 0.0
+        try:
+            hat_x, hat_y = self._joystick.get_hat(0)
+            del hat_x
+            return float(hat_y)
+        except Exception as exc:
+            self._mark_joystick_disconnected(f"hat read failed: {exc}")
+            return 0.0
+
+    def _connect_joystick_or_raise(self) -> None:
+        if self._pygame is None:
+            raise RuntimeError("pygame is not initialized")
+        self._pygame.joystick.quit()
+        self._pygame.joystick.init()
+        joystick_count = self._pygame.joystick.get_count()
+        if joystick_count <= self.device_index:
+            raise RuntimeError(
+                f"No Xbox controller found at index {self.device_index}; "
+                f"pygame sees {joystick_count} joystick(s)"
+            )
+        joystick = self._pygame.joystick.Joystick(self.device_index)
+        joystick.init()
+        self._joystick = joystick
+        try:
+            self._joystick_instance_id = int(joystick.get_instance_id())
+        except Exception:
+            self._joystick_instance_id = None
+        self._disconnected_reported = False
+        print(
+            "\033[36m"
+            "已连接手柄 "
+            f"{self.device_index}: {joystick.get_name()} "
+            f"轴数量={joystick.get_numaxes()} 按钮数量={joystick.get_numbuttons()}"
+            "\033[0m"
+        )
+
+    def _try_reconnect_joystick(self, force: bool = False) -> None:
+        if self._pygame is None:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_reconnect_attempt < 1.0:
+            return
+        self._last_reconnect_attempt = now
+        try:
+            self._connect_joystick_or_raise()
+            print("\033[32m手柄已自动重连。\033[0m")
+        except Exception as exc:
+            if not self._disconnected_reported:
+                print(f"\033[33m等待手柄重连：{exc}\033[0m")
+                self._disconnected_reported = True
+
+    def _mark_joystick_disconnected(self, reason: str) -> None:
+        if not self._disconnected_reported:
+            print(f"\033[33m手柄连接失效，动作置零并尝试自动重连：{reason}\033[0m")
+            self._disconnected_reported = True
+        self._joystick = None
+        self._joystick_instance_id = None
+
+    def _zero_action(self) -> FloatArray:
+        return np.zeros((self.action_dim,), dtype=np.float32)
 
     @staticmethod
     def _buttons(
@@ -448,6 +555,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--device-index", type=int, default=0)
     parser.add_argument("--deadzone", type=float, default=0.12)
     parser.add_argument("--max-delta-m", type=float, default=0.005)
+    parser.add_argument("--max-delta-rad", type=float, default=0.034906585)
+    parser.add_argument("--action-dim", type=int, choices=[4, 7], default=7)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--dry-run-mode",
@@ -457,6 +566,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--debug", action="store_true", help="Print raw axis/button values.")
     parser.add_argument("--hz", type=float, default=10.0)
+    parser.add_argument(
+        "--gripper-action-mode",
+        choices=["hold_on_release", "persistent_target"],
+        default="hold_on_release",
+    )
 
     args = parser.parse_args(argv)
 
@@ -464,9 +578,12 @@ def main(argv: list[str] | None = None) -> None:
         device_index=args.device_index,
         deadzone=args.deadzone,
         max_delta_m=args.max_delta_m,
+        max_delta_rad=args.max_delta_rad,
+        action_dim=args.action_dim,
         dry_run=args.dry_run,
         debug=args.debug,
         dry_run_mode=args.dry_run_mode,
+        gripper_action_mode=args.gripper_action_mode,
     )
 
     controller.connect()

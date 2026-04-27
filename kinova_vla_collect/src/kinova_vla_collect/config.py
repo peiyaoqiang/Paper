@@ -33,7 +33,9 @@ class WorkspaceConfig:
 @dataclass(frozen=True)
 class ControlConfig:
     hz: float
+    action_dim: int
     max_delta_m: float
+    max_delta_rad: float
     deadzone: float
     allow_motion_when_not_recording: bool
     max_steps: int
@@ -51,6 +53,7 @@ class XboxConfig:
     mapping: dict[str, Any]
     debug: bool
     dry_run_mode: str
+    gripper_action_mode: str
 
 
 @dataclass(frozen=True)
@@ -154,7 +157,14 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         control=ControlConfig(
             hz=float(control["hz"]),
+            action_dim=int(control.get("action_dim", 7)),
             max_delta_m=float(control["max_delta_m"]),
+            max_delta_rad=float(
+                control.get(
+                    "max_delta_rad",
+                    float(raw.get("kinova", {}).get("max_rotation_step_deg", 2.0)) * 3.141592653589793 / 180.0,
+                )
+            ),
             deadzone=float(control["deadzone"]),
             allow_motion_when_not_recording=bool(control.get("allow_motion_when_not_recording", True)),
             max_steps=int(control.get("max_steps", 500)),
@@ -173,6 +183,7 @@ def load_config(path: str | Path) -> AppConfig:
             mapping=dict(xbox.get("mapping", {})),
             debug=bool(xbox.get("debug", False)),
             dry_run_mode=str(xbox.get("dry_run_mode", "keyboard")),
+            gripper_action_mode=str(xbox.get("gripper_action_mode", "hold_on_release")),
         ),
         camera=CameraConfig(
             width=int(camera["width"]),

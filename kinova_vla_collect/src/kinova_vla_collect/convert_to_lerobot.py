@@ -14,7 +14,7 @@ from numpy.typing import NDArray
 FloatArray = NDArray[np.float32]
 
 
-ACTION_DEFINITION = "[dx, dy, dz, gripper]"
+ACTION_DEFINITION = "[dx, dy, dz, droll, dpitch, dyaw, gripper]"
 IMAGE_KEY = "observation.images.wrist"
 STATE_KEY = "observation.state"
 ACTION_KEY = "action"
@@ -94,7 +94,7 @@ def convert_to_lerobot_intermediate(
         "fields": {
             IMAGE_KEY: "relative image path under output task directory",
             STATE_KEY: "float32 [T, state_dim]",
-            ACTION_KEY: "float32 [T, 4]",
+            ACTION_KEY: "float32 [T, action_dim]",
             TASK_KEY: "string [T]",
             TIMESTAMP_KEY: "float64 [T]",
             EPISODE_INDEX_KEY: "int32 [T]",
@@ -105,11 +105,14 @@ def convert_to_lerobot_intermediate(
             "dx": "end-effector x delta in meters per control step",
             "dy": "end-effector y delta in meters per control step",
             "dz": "end-effector z delta in meters per control step",
+            "droll": "end-effector roll delta in radians per control step, present when action_dim=7",
+            "dpitch": "end-effector pitch delta in radians per control step, present when action_dim=7",
+            "dyaw": "end-effector yaw delta in radians per control step, present when action_dim=7",
             "gripper": "-1 open, 0 hold, +1 close",
         },
         "openpi_note": (
             "For OpenPI fine-tuning, keep the action definition unchanged: "
-            "action = [dx, dy, dz, gripper]."
+            "action = [dx, dy, dz, droll, dpitch, dyaw, gripper]."
         ),
         "lerobot_available": lerobot_available,
         "todo_lerobot_dataset": (
@@ -171,7 +174,7 @@ def validate_conversion(output_task_dir: Path) -> dict[str, Any]:
             num_frames += length
             if states.ndim != 2 or states.shape[0] != length:
                 errors.append(f"{shard_path.name}: invalid state shape {states.shape}")
-            if actions.shape != (length, 4):
+            if actions.ndim != 2 or actions.shape[0] != length or actions.shape[1] not in {4, 7}:
                 errors.append(f"{shard_path.name}: invalid action shape {actions.shape}")
             if timestamps.shape != (length,):
                 errors.append(f"{shard_path.name}: invalid timestamp shape {timestamps.shape}")
@@ -219,8 +222,8 @@ def _convert_one_episode(
         timestamps = steps["timestamps"].astype(np.float64)
         frame_indices = steps["frame_indices"].astype(np.int32)
 
-    if actions.ndim != 2 or actions.shape[1] != 4:
-        raise ValueError(f"{episode_dir.name}: expected actions [T, 4], got {actions.shape}")
+    if actions.ndim != 2 or actions.shape[1] not in {4, 7}:
+        raise ValueError(f"{episode_dir.name}: expected actions [T, 4] or [T, 7], got {actions.shape}")
     num_frames = int(actions.shape[0])
     if states.ndim != 2 or states.shape[0] != num_frames:
         raise ValueError(f"{episode_dir.name}: states rows do not match actions")

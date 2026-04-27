@@ -147,11 +147,15 @@ class PolicyRunner:
                         break
 
                     image = self.camera.get_rgb()
-                    state = self.robot.get_state()
+                    state = self.robot.get_state().astype(np.float32)
+                    state = state.copy()
+                    state[6] = self.gripper.get_position()
+                    if state.shape != (14,):
+                        raise RuntimeError(f"Robot state must have shape (14,), got {state.shape}")
                     action = self._next_action(image=image, state=state)
                     clipped_action = self.safety.limit_action(action, current_position=state[:3])
                     self.robot.step_delta_action(clipped_action, self.dt)
-                    self.gripper.apply_action(float(clipped_action[3]))
+                    self.gripper.apply_action(float(clipped_action[-1]))
 
                     if step_index % 5 == 0:
                         print(

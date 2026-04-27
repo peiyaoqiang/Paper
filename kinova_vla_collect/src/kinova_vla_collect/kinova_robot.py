@@ -186,21 +186,24 @@ class KinovaRobot:
     def step_delta_action(self, action: FloatArray, dt: float) -> None:
         self._ensure_connected()
         action_array = np.asarray(action, dtype=np.float32)
-        if action_array.shape != (4,):
-            raise ValueError(f"Kinova action must have shape (4,), got {action_array.shape}")
+        if action_array.shape not in {(4,), (7,)}:
+            raise ValueError(f"Kinova action must have shape (4,) or (7,), got {action_array.shape}")
         if dt <= 0.0:
             raise ValueError("dt must be positive")
 
         linear_velocity = action_array[:3] / float(dt)
         limited_linear_velocity = self._limit_linear_velocity(linear_velocity)
+        angular_velocity = np.zeros(3, dtype=np.float32)
+        if action_array.shape == (7,):
+            angular_velocity = action_array[3:6] / float(dt)
         twist_base = np.array(
             [
                 limited_linear_velocity[0],
                 limited_linear_velocity[1],
                 limited_linear_velocity[2],
-                0.0,
-                0.0,
-                0.0,
+                angular_velocity[0],
+                angular_velocity[1],
+                angular_velocity[2],
             ],
             dtype=np.float32,
         )
@@ -208,6 +211,7 @@ class KinovaRobot:
         if self.dry_run:
             self._last_twist = twist_base
             self._simulated_state[0:3] += limited_linear_velocity * float(dt)
+            self._simulated_state[3:6] += angular_velocity * float(dt)
             self._simulated_state[7:10] += limited_linear_velocity * float(dt) * 0.1
             return
 
@@ -289,6 +293,7 @@ class KinovaRobot:
     def _set_ros_twist_command(self, twist_base: FloatArray, stale_timeout_s: float) -> None:
         command_twist = twist_base.copy()
         command_twist[:3] = self._base_vector_to_command_frame(twist_base[:3])
+        command_twist[3:6] = self._base_vector_to_command_frame(twist_base[3:6])
         with self._ros_lock:
             self._ros_target_twist = command_twist.astype(np.float32)
             self._ros_last_command_time = time.monotonic()

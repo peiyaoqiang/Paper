@@ -21,7 +21,7 @@ class InspectConfig:
     dataset_root: Path
     task_name: str
     output_dir: Path | None
-    expected_action_dim: int = 4
+    expected_action_dim: int = 7
     expected_state_dim: int = 14
     noop_threshold: float = 1e-6
     excessive_noop_ratio: float = 0.8
@@ -239,7 +239,7 @@ def summarize_actions(actions: FloatArray, noop_threshold: float) -> dict[str, A
             "noop_ratio": 0.0,
             "gripper_ratios": {"open": 0.0, "hold": 0.0, "close": 0.0},
         }
-    gripper = actions[:, 3]
+    gripper = actions[:, _gripper_index(actions.shape[1])]
     noops = (np.linalg.norm(actions[:, :3], axis=1) <= noop_threshold) & (np.abs(gripper) <= 0.5)
     total = max(1, actions.shape[0])
     return {
@@ -257,7 +257,7 @@ def summarize_actions(actions: FloatArray, noop_threshold: float) -> dict[str, A
 
 
 def print_action_summary(title: str, stats: dict[str, Any]) -> None:
-    labels = ["dx", "dy", "dz", "gripper"]
+    labels = _action_labels(len(stats.get("min", [])))
     print(title)
     for name, min_value, max_value, mean_value, std_value in zip(
         labels,
@@ -348,8 +348,9 @@ def plot_episode_actions(episode_dir: Path, output_path: Path) -> bool:
         x_label = "frame index"
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
-    labels = ["dx", "dy", "dz", "gripper"]
+    labels = _action_labels(actions.shape[1])
+    fig, axes = plt.subplots(len(labels), 1, figsize=(10, max(8, 1.8 * len(labels))), sharex=True)
+    axes = np.atleast_1d(axes)
     for index, axis in enumerate(axes):
         axis.plot(x_values, actions[:, index], linewidth=1.5)
         axis.set_ylabel(labels[index])
@@ -367,6 +368,22 @@ def _sample_episode(episode_dirs: list[Path], random_seed: int) -> Path | None:
         return None
     rng = random.Random(random_seed)
     return rng.choice(episode_dirs)
+
+
+def _gripper_index(action_dim: int) -> int:
+    if action_dim == 7:
+        return 6
+    if action_dim == 4:
+        return 3
+    raise ValueError(f"Unsupported action_dim={action_dim}; expected 4 or 7")
+
+
+def _action_labels(action_dim: int) -> list[str]:
+    if action_dim == 7:
+        return ["dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper"]
+    if action_dim == 4:
+        return ["dx", "dy", "dz", "gripper"]
+    return [f"action_{index}" for index in range(action_dim)]
 
 
 def _estimate_frame_duration_ms(timestamps: NDArray[np.float64]) -> int:
@@ -389,7 +406,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--dataset-root", type=Path, default=Path("data/raw"))
     parser.add_argument("--task-name", "--task", dest="task_name", type=str, default="pick_up_the_red_ball")
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--expected-action-dim", type=int, default=4)
+    parser.add_argument("--expected-action-dim", type=int, default=7)
     parser.add_argument("--expected-state-dim", type=int, default=14)
     parser.add_argument("--noop-threshold", type=float, default=1e-6)
     parser.add_argument("--excessive-noop-ratio", type=float, default=0.8)

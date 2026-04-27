@@ -5,13 +5,12 @@ Kinova Gen3 + wrist-mounted Intel RealSense D435i + Xbox controller + Modbus gri
 The first task is `pick up the red ball`. The raw action is:
 
 ```text
-action = [dx, dy, dz, gripper]
+action = [dx, dy, dz, droll, dpitch, dyaw, gripper]
 ```
 
-where `dx/dy/dz` are end-effector delta translations in meters per 
-
-
- step, and `gripper` is `-1` open, `0` hold, `+1` close.
+where `dx/dy/dz` are end-effector delta translations in meters per step,
+`droll/dpitch/dyaw` are end-effector delta RPY rotations in radians per step,
+and `gripper` is `-1` open, `0` hold, `+1` close.
 
 ## Install
 
@@ -36,10 +35,13 @@ Xbox controls:
 - `A`: finish current episode as success
 - `B`: abort and discard current episode
 - `Back`: stop program
-- `LT`: open gripper
-- `RT`: close gripper
+- `LT`: open gripper while held
+- `RT`: close gripper while held
 - left stick: `dx/dy`
 - right stick vertical: `dz`
+- right stick horizontal: `dyaw`
+- `LB` / `RB`: `droll`
+- D-pad up/down: `dpitch`
 
 If no Xbox is available in dry-run mode, the collector still runs and emits zero actions.
 
@@ -120,19 +122,20 @@ The policy server request contains wrist RGB image, robot state, and task
 prompt. The expected policy output is either:
 
 ```json
-{"action": [dx, dy, dz, gripper]}
+{"action": [dx, dy, dz, droll, dpitch, dyaw, gripper]}
 ```
 
 or an action chunk:
 
 ```json
-{"actions": [[dx, dy, dz, gripper], [dx, dy, dz, gripper]]}
+{"actions": [[dx, dy, dz, droll, dpitch, dyaw, gripper], [dx, dy, dz, droll, dpitch, dyaw, gripper]]}
 ```
 
 All deployment actions are safety-clipped before execution:
 
 ```text
 dx/dy/dz: max 0.01 m per step
+droll/dpitch/dyaw: max 0.0349 rad per step
 gripper: clipped to [-1, 1]
 ```
 
@@ -140,7 +143,7 @@ The action definition must remain identical to collection and OpenPI
 fine-tuning:
 
 ```text
-action = [dx, dy, dz, gripper]
+action = [dx, dy, dz, droll, dpitch, dyaw, gripper]
 ```
 
 ## Convert To LeRobot-Style Dataset
@@ -196,7 +199,7 @@ with `LeRobotDataset.create(...)` / `add_frame(...)` calls using the same field
 names. For OpenPI fine-tuning, keep the action definition unchanged:
 
 ```text
-action = [dx, dy, dz, gripper]
+action = [dx, dy, dz, droll, dpitch, dyaw, gripper]
 ```
 
 ## Raw dataset format
