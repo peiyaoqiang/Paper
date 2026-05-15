@@ -1,0 +1,10 @@
+{
+  "stop_reason": "red_lost",
+  "total_steps": 21,
+  "average_total_ms": 4709.869290817799,
+  "average_policy_ms": 4666.498151956396,
+  "average_observe_ms": 2.82791731760054,
+  "average_robot_ms": 0.6060700464083559,
+  "average_gripper_ms": 0.016171228542754598,
+  "average_log_ms": 1.5377858203878119
+}

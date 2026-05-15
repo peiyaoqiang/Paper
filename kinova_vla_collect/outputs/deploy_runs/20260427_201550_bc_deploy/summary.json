@@ -1,0 +1,10 @@
+{
+  "stop_reason": "completed_unknown",
+  "total_steps": 13,
+  "average_total_ms": 5329.78145999816,
+  "average_policy_ms": 5319.469903309185,
+  "average_observe_ms": 1.9020906127899742,
+  "average_robot_ms": 0.4772581563044626,
+  "average_gripper_ms": 0.013082537826938698,
+  "average_log_ms": 0.7724177658719082
+}
