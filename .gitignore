@@ -1,3 +1,44 @@
+# datasets / robot data
 datasets/
 data/
+kinova_vla_collect/data/
+analysis/captures/
+analysis/logs/
+
+# archives
 *.tar.gz
+*.zip
+*.rar
+*.7z
+
+# numpy / robot data
+*.npy
+*.npz
+*.bag
+*.db3
+
+# preview / media
+*.gif
+*.mp4
+*.avi
+
+# checkpoints / model weights
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# logs / wandb
+logs/
+wandb/
+*.log
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# system
+.DS_Store
