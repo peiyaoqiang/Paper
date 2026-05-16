@@ -107,7 +107,7 @@ class XboxController:
         mapping: XboxMapping | dict[str, Any] | None = None,
         debug: bool = False,
         dry_run_mode: DryRunMode = "keyboard",
-        gripper_action_mode: GripperActionMode = "hold_on_release",
+        gripper_action_mode: GripperActionMode = "persistent_target",
         random_seed: int | None = None,
     ) -> None:
         self.device_index = device_index
@@ -140,8 +140,12 @@ class XboxController:
         self._latched_buttons: ButtonDict = self._buttons()
 
         # Gripper target used by persistent_target mode.
-        # -1.0 = open, 0.0 = hold, +1.0 = close.
+        # -1.0 = desired open state, +1.0 = desired close state.
         self._gripper_target: float = -1.0
+
+    @property
+    def input_available(self) -> bool:
+        return bool(self.dry_run or self._joystick is not None)
 
     def connect(self) -> None:
         if self.dry_run and self.dry_run_mode in {"random", "scripted"}:
@@ -185,11 +189,10 @@ class XboxController:
 
         Args:
             value:
-                -1.0 = open
-                 0.0 = hold
-                +1.0 = close
+                -1.0 = desired open state
+                +1.0 = desired close state
         """
-        self._gripper_target = float(np.clip(value, -1.0, 1.0))
+        self._gripper_target = 1.0 if float(value) > 0.0 else -1.0
 
     def read(self) -> tuple[FloatArray, ButtonDict]:
         if self.dry_run:
@@ -366,7 +369,9 @@ class XboxController:
 
         for event in self._pygame.event.get():
             if event.type == self._pygame.QUIT:
-                return np.zeros(4, dtype=np.float32), self._buttons(stop=True)
+                action = self._zero_action()
+                action[-1] = self._gripper_target
+                return action, self._buttons(stop=True)
 
         keys = self._pygame.key.get_pressed()
 
@@ -398,26 +403,46 @@ class XboxController:
 
     def _read_random_dry_run(self) -> tuple[FloatArray, ButtonDict]:
         scale = self.max_delta_m * 0.35
+        if self._rng.random() < 0.05:
+            self._gripper_target = self._rng.choice([-1.0, 1.0])
 
-        action = np.array(
-            [
-                self._rng.uniform(-scale, scale),
-                self._rng.uniform(-scale, scale),
-                self._rng.uniform(-scale, scale),
-                self._rng.choice([-1.0, 0.0, 0.0, 0.0, 1.0]),
-            ],
-            dtype=np.float32,
-        )
+        if self.action_dim == 4:
+            action = np.array(
+                [
+                    self._rng.uniform(-scale, scale),
+                    self._rng.uniform(-scale, scale),
+                    self._rng.uniform(-scale, scale),
+                    self._gripper_target,
+                ],
+                dtype=np.float32,
+            )
+        else:
+            action = np.array(
+                [
+                    self._rng.uniform(-scale, scale),
+                    self._rng.uniform(-scale, scale),
+                    self._rng.uniform(-scale, scale),
+                    self._rng.uniform(-self.max_delta_rad * 0.25, self.max_delta_rad * 0.25),
+                    self._rng.uniform(-self.max_delta_rad * 0.25, self.max_delta_rad * 0.25),
+                    self._rng.uniform(-self.max_delta_rad * 0.25, self.max_delta_rad * 0.25),
+                    self._gripper_target,
+                ],
+                dtype=np.float32,
+            )
 
         return action, self._buttons()
 
     def _read_scripted_dry_run(self) -> tuple[FloatArray, ButtonDict]:
         self._dry_counter += 1
 
-        action = np.zeros(4, dtype=np.float32)
+        action = self._zero_action()
+        action[-1] = self._gripper_target
 
         if 2 <= self._dry_counter <= 20:
             action[0] = self.max_delta_m * 0.25
+        if self._dry_counter == 10:
+            self._gripper_target = 1.0
+            action[-1] = self._gripper_target
 
         return action, self._buttons(
             start=self._dry_counter == 1,
@@ -533,7 +558,9 @@ class XboxController:
         self._joystick_instance_id = None
 
     def _zero_action(self) -> FloatArray:
-        return np.zeros((self.action_dim,), dtype=np.float32)
+        action = np.zeros((self.action_dim,), dtype=np.float32)
+        action[-1] = self._gripper_target
+        return action
 
     @staticmethod
     def _buttons(
@@ -569,7 +596,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--gripper-action-mode",
         choices=["hold_on_release", "persistent_target"],
-        default="hold_on_release",
+        default="persistent_target",
     )
 
     args = parser.parse_args(argv)

@@ -183,7 +183,7 @@ def load_config(path: str | Path) -> AppConfig:
             mapping=dict(xbox.get("mapping", {})),
             debug=bool(xbox.get("debug", False)),
             dry_run_mode=str(xbox.get("dry_run_mode", "keyboard")),
-            gripper_action_mode=str(xbox.get("gripper_action_mode", "hold_on_release")),
+            gripper_action_mode=str(xbox.get("gripper_action_mode", "persistent_target")),
         ),
         camera=CameraConfig(
             width=int(camera["width"]),

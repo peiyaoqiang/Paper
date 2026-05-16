@@ -3,7 +3,7 @@ task:
   prompt: pick up the red ball
 
 dataset:
-  root: data/raw
+  root: datasets/data/lerobot
   robot: Kinova Gen3
   camera: Intel RealSense D435i wrist-mounted
 
@@ -31,12 +31,12 @@ xbox:
   device_index: 0
   debug: false
   dry_run_mode: scripted
-  # New full training collection should use action semantics:
+  # VLA/OpenPI collection uses target-state gripper semantics:
   #   LT pressed -> -1 open
   #   RT pressed -> +1 close
-  #   released   ->  0 hold
-  # The old test dataset used persistent_target, which produced no hold actions.
-  gripper_action_mode: hold_on_release
+  #   released   -> previous target is kept
+  # action[-1] must never be 0 in saved data.
+  gripper_action_mode: persistent_target
   mapping:
     axes:
       left_x: 0

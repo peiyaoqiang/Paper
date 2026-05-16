@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 
+import numpy as np
+
 from kinova_vla_collect.config import AppConfig, load_config
 from kinova_vla_collect.kinova_robot import KinovaRobot
 from kinova_vla_collect.modbus_gripper import ModbusGripper
@@ -99,7 +101,7 @@ class TeleopCollector:
             mapping=config.xbox.mapping,
             debug=config.xbox.debug,
             dry_run_mode=config.xbox.dry_run_mode,  # type: ignore[arg-type]
-            gripper_action_mode=config.xbox.gripper_action_mode,  # type: ignore[arg-type]
+            gripper_action_mode="persistent_target",
         )
 
         self.recorder = EpisodeRecorder(
@@ -170,14 +172,44 @@ class TeleopCollector:
             self._shutdown()
 
     def _run_one_step(self) -> None:
-        image = self.camera.get_rgb()
+        try:
+            image = self.camera.get_rgb()
+            state = self.robot.get_state().copy()
+            state[6] = self.gripper.get_position()
+            raw_action, buttons = self.xbox.read()
+        except Exception as exc:
+            self.robot.stop()
+            self.gripper.hold()
+            print(_color(f"跳过当前帧：图像/state/遥控输入读取失败：{exc}", "yellow"))
+            return
 
-        state = self.robot.get_state()
-        state = state.copy()
-        state[6] = self.gripper.get_position()
+        if not self.xbox.input_available:
+            self.robot.stop()
+            self.gripper.hold()
+            print(_color("跳过当前帧：遥控器输入不可用，等待重连。", "yellow"))
+            return
+        if image is None or image.ndim != 3 or image.shape[2] != 3:
+            self.robot.stop()
+            self.gripper.hold()
+            print(_color("跳过当前帧：wrist RGB 图像无效。", "yellow"))
+            return
+        if state.shape != (14,) or not np.all(np.isfinite(state)):
+            self.robot.stop()
+            self.gripper.hold()
+            print(_color("跳过当前帧：robot state 无效。", "yellow"))
+            return
+        if raw_action.shape != (self.config.control.action_dim,) or not np.all(np.isfinite(raw_action)):
+            self.robot.stop()
+            self.gripper.hold()
+            print(_color("跳过当前帧：遥控器 action 无效。", "yellow"))
+            return
 
-        raw_action, buttons = self.xbox.read()
         action = self.safety.limit_action(raw_action, current_position=state[:3])
+        if float(action[-1]) not in {-1.0, 1.0}:
+            raise RuntimeError(
+                f"Invalid gripper target in action[-1]: {float(action[-1]):+.3f}. "
+                "VLA/OpenPI collection requires -1=open target or +1=close target; 0 hold is forbidden."
+            )
 
         if buttons["stop"]:
             self.robot.stop()
@@ -187,10 +219,7 @@ class TeleopCollector:
             return
 
         if self.mode is CollectorMode.NOT_RECORDING and buttons["start"]:
-            # Every new episode should start with a physically open gripper.
-            # With hold_on_release action labels, released LT/RT records
-            # action[-1] = 0.0, so resetting the target alone is not enough.
-            print(_color("开始新 episode：先打开夹爪并进入 hold。", "cyan"))
+            print(_color("开始新 episode：先打开夹爪，并把 gripper target 置为 -1。", "cyan"))
             self.xbox.reset_gripper_target(-1.0)
             self.gripper.open_gripper()
             time.sleep(min(1.0, max(0.0, self.config.gripper.open_timeout_s)))
@@ -202,10 +231,7 @@ class TeleopCollector:
             self.mode = CollectorMode.RECORDING
 
             print(_color(f"开始录制 episode_{self.episode_index:06d}: {episode_dir}", "green"))
-
-        if self.mode is CollectorMode.RECORDING:
-            self.recorder.append(image, state, action)
-            self.current_episode_steps += 1
+            return
 
         if self.mode is CollectorMode.RECORDING or self.config.control.allow_motion_when_not_recording:
             self.robot.step_delta_action(action, self.dt)
@@ -213,6 +239,10 @@ class TeleopCollector:
         else:
             self.robot.stop()
             self.gripper.hold()
+
+        if self.mode is CollectorMode.RECORDING:
+            self.recorder.append(image, state, action)
+            self.current_episode_steps += 1
 
         if self.mode is CollectorMode.RECORDING:
             if buttons["success"]:
@@ -285,6 +315,8 @@ class TeleopCollector:
         except Exception as exc:
             print(f"Warning: robot.disconnect() failed: {exc}")
 
+        self._print_dataset_summary()
+
     def _emergency_cleanup(self) -> None:
         try:
             self.robot.stop()
@@ -340,10 +372,33 @@ class TeleopCollector:
         task_dir = self.config.dataset.root / self.config.task.name
         index = 0
 
-        while (task_dir / f"episode_{index:06d}").exists():
+        while (task_dir / "data" / f"episode_{index:06d}.npz").exists() or (
+            task_dir / "images" / f"episode_{index:06d}"
+        ).exists():
             index += 1
 
         return index
+
+    def _print_dataset_summary(self) -> None:
+        try:
+            summary = self.recorder.write_summary()
+        except Exception as exc:
+            print(f"Warning: failed to write dataset summary: {exc}")
+            return
+
+        print(_color("采集 summary", "cyan"))
+        print(f"  episode 数量: {summary['episode_count']}")
+        print(f"  总帧数: {summary['total_frames']}")
+        print(f"  平均 fps: {summary['average_fps']:.3f}")
+        print(f"  action min:  {summary['action_min']}")
+        print(f"  action max:  {summary['action_max']}")
+        print(f"  action mean: {summary['action_mean']}")
+        print(f"  action std:  {summary['action_std']}")
+        print(f"  gripper open frame 数量: {summary['gripper_open_frames']}")
+        print(f"  gripper close frame 数量: {summary['gripper_close_frames']}")
+        print(f"  每个 episode 的帧数: {summary['episode_frame_counts']}")
+        print(f"  是否存在 NaN / inf: {summary['has_nan_or_inf']}")
+        print(f"  非 -1/+1 gripper 数量: {summary['invalid_gripper_value_count']}")
 
 
 def main(argv: list[str] | None = None) -> None:

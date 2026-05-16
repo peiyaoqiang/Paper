@@ -39,6 +39,14 @@ def convert_to_lerobot_intermediate(
     task_name: str | None = None,
     overwrite: bool = False,
 ) -> ConversionResult:
+    if _is_intermediate_task_dir(input_path):
+        return _copy_or_validate_intermediate_input(
+            input_path=input_path,
+            lerobot_dataset_root=lerobot_dataset_root,
+            task_name=task_name,
+            overwrite=overwrite,
+        )
+
     episodes, resolved_task_name = _resolve_input_episodes(input_path, task_name)
     output_task_dir = lerobot_dataset_root / resolved_task_name
     data_dir = output_task_dir / "data"
@@ -105,10 +113,10 @@ def convert_to_lerobot_intermediate(
             "dx": "end-effector x delta in meters per control step",
             "dy": "end-effector y delta in meters per control step",
             "dz": "end-effector z delta in meters per control step",
-            "droll": "end-effector roll delta in radians per control step, present when action_dim=7",
-            "dpitch": "end-effector pitch delta in radians per control step, present when action_dim=7",
-            "dyaw": "end-effector yaw delta in radians per control step, present when action_dim=7",
-            "gripper": "-1 open, 0 hold, +1 close",
+            "droll": "end-effector roll delta in radians per control step",
+            "dpitch": "end-effector pitch delta in radians per control step",
+            "dyaw": "end-effector yaw delta in radians per control step",
+            "gripper": "-1 desired open state, +1 desired close state",
         },
         "openpi_note": (
             "For OpenPI fine-tuning, keep the action definition unchanged: "
@@ -172,10 +180,14 @@ def validate_conversion(output_task_dir: Path) -> dict[str, Any]:
 
             length = len(image_paths)
             num_frames += length
-            if states.ndim != 2 or states.shape[0] != length:
+            if states.ndim != 2 or states.shape != (length, 14):
                 errors.append(f"{shard_path.name}: invalid state shape {states.shape}")
-            if actions.ndim != 2 or actions.shape[0] != length or actions.shape[1] not in {4, 7}:
+            if actions.ndim != 2 or actions.shape[0] != length or actions.shape[1] != 7:
                 errors.append(f"{shard_path.name}: invalid action shape {actions.shape}")
+            elif np.any(actions[:, -1] == 0.0):
+                errors.append(f"{shard_path.name}: action[-1] contains 0 hold values")
+            elif not np.all((actions[:, -1] == -1.0) | (actions[:, -1] == 1.0)):
+                errors.append(f"{shard_path.name}: action[-1] contains values other than -1 or +1")
             if timestamps.shape != (length,):
                 errors.append(f"{shard_path.name}: invalid timestamp shape {timestamps.shape}")
             if episode_indices.shape != (length,):
@@ -202,6 +214,36 @@ def validate_conversion(output_task_dir: Path) -> dict[str, Any]:
     }
 
 
+def _copy_or_validate_intermediate_input(
+    input_path: Path,
+    lerobot_dataset_root: Path,
+    task_name: str | None,
+    overwrite: bool,
+) -> ConversionResult:
+    info = _read_json(input_path / "meta" / "info.json")
+    resolved_task_name = task_name or str(info.get("task_name") or input_path.name)
+    output_task_dir = lerobot_dataset_root / resolved_task_name
+
+    if input_path.resolve() != output_task_dir.resolve():
+        if output_task_dir.exists():
+            if not overwrite:
+                raise FileExistsError(f"Output task directory already exists: {output_task_dir}")
+            shutil.rmtree(output_task_dir)
+        shutil.copytree(input_path, output_task_dir)
+    report = validate_conversion(output_task_dir)
+
+    copied_info = _read_json(output_task_dir / "meta" / "info.json")
+    episodes = copied_info.get("episodes", [])
+    converted = [str(item.get("episode", "")) for item in episodes if isinstance(item, dict)]
+    return ConversionResult(
+        output_task_dir=output_task_dir,
+        converted_episodes=converted,
+        skipped_episodes=[],
+        num_frames=int(report["num_frames"]),
+        report_path=output_task_dir / "meta" / "info.json",
+    )
+
+
 def _convert_one_episode(
     episode_dir: Path,
     output_task_dir: Path,
@@ -220,10 +262,16 @@ def _convert_one_episode(
         states = steps["states"].astype(np.float32)
         actions = steps["actions"].astype(np.float32)
         timestamps = steps["timestamps"].astype(np.float64)
+        if timestamps.size:
+            timestamps = timestamps - timestamps[0]
         frame_indices = steps["frame_indices"].astype(np.int32)
 
-    if actions.ndim != 2 or actions.shape[1] not in {4, 7}:
-        raise ValueError(f"{episode_dir.name}: expected actions [T, 4] or [T, 7], got {actions.shape}")
+    if actions.ndim != 2 or actions.shape[1] != 7:
+        raise ValueError(f"{episode_dir.name}: expected actions [T, 7], got {actions.shape}")
+    if np.any(actions[:, -1] == 0.0):
+        raise ValueError(f"{episode_dir.name}: action[-1] contains 0 hold values")
+    if not np.all((actions[:, -1] == -1.0) | (actions[:, -1] == 1.0)):
+        raise ValueError(f"{episode_dir.name}: action[-1] must contain only -1 or +1")
     num_frames = int(actions.shape[0])
     if states.ndim != 2 or states.shape[0] != num_frames:
         raise ValueError(f"{episode_dir.name}: states rows do not match actions")
@@ -269,6 +317,15 @@ def _resolve_input_episodes(input_path: Path, task_name: str | None) -> tuple[li
         episodes = sorted(path for path in input_path.glob("episode_*") if path.is_dir())
         return episodes, resolved_task_name
     raise ValueError(f"Input path must be an episode directory or task directory: {input_path}")
+
+
+def _is_intermediate_task_dir(path: Path) -> bool:
+    return (
+        path.is_dir()
+        and (path / "meta" / "info.json").exists()
+        and (path / "data").is_dir()
+        and (path / "images").is_dir()
+    )
 
 
 def _episode_index_from_dir(episode_dir: Path) -> int:
