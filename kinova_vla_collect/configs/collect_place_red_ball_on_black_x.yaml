@@ -1,0 +1,125 @@
+task:
+  name: place_red_ball_on_black_x
+  prompt: put the red ball on the black X
+
+dataset:
+  root: datasets/data/lerobot
+  robot: Kinova Gen3
+  camera: Intel RealSense D435i wrist-mounted
+
+control:
+  hz: 5.0
+  action_dim: 7
+  max_delta_m: 0.03
+  # 40 degrees per control step, in radians.
+  max_delta_rad: 0.69813170
+  deadzone: 0.12
+  allow_motion_when_not_recording: true
+  max_steps: 500
+  workspace:
+    x_min: 0.20
+    x_max: 0.80
+    y_min: -0.55
+    y_max: 0.40
+    z_min: 0.00
+    z_max: 0.60
+
+hardware:
+  dry_run: false
+
+xbox:
+  device_index: 0
+  debug: false
+  dry_run_mode: scripted
+  # VLA/OpenPI collection uses target-state gripper semantics:
+  #   LT pressed -> -1 open
+  #   RT pressed -> +1 close
+  #   released   -> previous target is kept
+  # action[-1] must never be 0 in saved data.
+  gripper_action_mode: persistent_target
+  mapping:
+    axes:
+      left_x: 0
+      left_y: 1
+      # Your controller reports right-stick horizontal on axis 3.
+      right_x: 3
+      # Your controller reports right-stick vertical on axis 4.
+      right_y: 4
+      # Your controller reports LT/RT on axes 2/5.
+      lt: 2
+      rt: 5
+    signs:
+      # Invert x/y to match your operator viewpoint.
+      dx: -1.0
+      dy: -1.0
+      dz: -1.0
+      droll: -1.0
+      dpitch: -1.0
+      dyaw: -1.0
+    buttons:
+      success: 0
+      abort: 1
+      # LB/RB rotate roll. D-pad up/down rotates pitch.
+      roll_negative: 4
+      roll_positive: 5
+      stop: 6
+      start: 7
+
+camera:
+  width: 640
+  height: 480
+  fps: 30
+  serial: null
+
+kinova:
+  # Values copied from the previous project config. The previous runtime used
+  # ROS2 twist topics; this repo's KinovaRobot still exposes the common
+  # step_delta_action(action, dt) interface and uses Kortex TODO hooks for
+  # dry_run=false unless you add a ROS2 backend.
+  mode: ros2_twist
+  ip: 192.168.1.10
+  username: admin
+  password: admin
+  max_linear_speed: 0.06
+  max_translation_step_m: 0.015
+  max_rotation_step_deg: 2.0
+  joint_state_topic: /joint_states
+  twist_command_topic: /twist_controller/commands
+  base_frame: base_link
+  ee_frame: end_effector_link
+  twist_command_frame: tool_frame
+  sequential_axis_commands: true
+  ros_node_name: paper_kinova_driver
+  state_timeout_s: 5.0
+  twist_command_duration_s: 0.8
+  twist_publish_rate_hz: 20.0
+  twist_stop_duration_s: 0.6
+  workspace_enforced: false
+
+gripper:
+  # CTAG Modbus RTU values copied from the previous project config.
+  mode: ctag_rtu
+  host: 192.168.1.20
+  port: 502
+  unit_id: 1
+  serial_port: /dev/ttyUSB0
+  baudrate: 115200
+  timeout_s: 4.0
+  open_pos_mm: 0.0
+  close_pos_mm: 120.0
+  max_stroke_mm: 120.0
+  speed: 30
+  close_torque: 10
+  open_torque: 100
+  acc_dec: 2000
+  parity: N
+  stopbits: 1
+  enable_rs485_mode: false
+  accept_pos_reached_as_success: true
+  rs485_rts_level_for_tx: true
+  rs485_rts_level_for_rx: false
+  rs485_delay_before_tx: 0.0
+  rs485_delay_before_rx: 0.0
+  open_timeout_s: 4.0
+  close_timeout_s: 5.0
+  tip_offset_ee_m: [0.0, 0.0, 0.28]
