@@ -2,6 +2,7 @@
 datasets/
 data/
 kinova_vla_collect/data/
+kinova_vla_collect/outputs/
 analysis/captures/
 analysis/logs/
 
@@ -41,4 +42,4 @@ __pycache__/
 venv/
 
 # system
-.DS_Store
+.DS_Store 

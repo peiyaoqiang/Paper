@@ -48,7 +48,7 @@ except ImportError:  # pragma: no cover - depends on ROS2 runtime
 
 
 class _KinovaROSInterface(Node):  # type: ignore[misc, valid-type]
-    def __init__(self, node_name: str, joint_state_topic: str, twist_command_topic: str) -> None:
+    def __init__(self, node_name: str, joint_state_topic: str, twist_command_topic: str | None) -> None:
         super().__init__(node_name)
         self.latest_joint_state: Any | None = None
         self.joint_state_sub = self.create_subscription(
@@ -57,7 +57,9 @@ class _KinovaROSInterface(Node):  # type: ignore[misc, valid-type]
             self._on_joint_state,
             qos_profile_sensor_data,
         )
-        self.twist_pub = self.create_publisher(Twist, twist_command_topic, 10)
+        self.twist_pub = None
+        if twist_command_topic is not None:
+            self.twist_pub = self.create_publisher(Twist, twist_command_topic, 10)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=False)
 
@@ -99,6 +101,7 @@ class KinovaRobot:
         state_timeout_s: float = 5.0,
         twist_publish_rate_hz: float = 20.0,
         twist_stop_duration_s: float = 0.6,
+        enable_motion_commands: bool = True,
     ) -> None:
         self.ip = ip
         self.username = username
@@ -119,6 +122,7 @@ class KinovaRobot:
         self.state_timeout_s = state_timeout_s
         self.twist_publish_rate_hz = max(1.0, twist_publish_rate_hz)
         self.twist_stop_duration_s = max(0.0, twist_stop_duration_s)
+        self.enable_motion_commands = enable_motion_commands
 
         self._connected = False
 
@@ -190,6 +194,8 @@ class KinovaRobot:
             raise ValueError(f"Kinova action must have shape (4,) or (7,), got {action_array.shape}")
         if dt <= 0.0:
             raise ValueError("dt must be positive")
+        if not self.enable_motion_commands and not self.dry_run:
+            raise RuntimeError("KinovaRobot was created with enable_motion_commands=False")
 
         linear_velocity = action_array[:3] / float(dt)
         limited_linear_velocity = self._limit_linear_velocity(linear_velocity)
@@ -231,6 +237,8 @@ class KinovaRobot:
         if self.dry_run:
             self._last_twist = zero_twist
             return
+        if not self.enable_motion_commands:
+            return
         if self.mode == "ros2_twist":
             self._set_ros_twist_command(zero_twist, stale_timeout_s=0.0)
             self._publish_ros_twist(zero_twist)
@@ -251,16 +259,17 @@ class KinovaRobot:
             raise RuntimeError("Failed to send Kinova emergency stop command") from exc
 
     def _connect_ros2(self) -> None:
-        self._ensure_ros2_available()
+        self._ensure_ros2_available(require_twist=self.enable_motion_commands)
         if not rclpy.ok():
             rclpy.init(args=None)
         self._ros_interface = _KinovaROSInterface(
             node_name=self.ros_node_name,
             joint_state_topic=self.joint_state_topic,
-            twist_command_topic=self.twist_command_topic,
+            twist_command_topic=self.twist_command_topic if self.enable_motion_commands else None,
         )
         self._wait_for_ros_state()
-        self._start_ros_publisher()
+        if self.enable_motion_commands:
+            self._start_ros_publisher()
 
     def _start_ros_publisher(self) -> None:
         if self._ros_running:
@@ -291,6 +300,8 @@ class KinovaRobot:
             time.sleep(period)
 
     def _set_ros_twist_command(self, twist_base: FloatArray, stale_timeout_s: float) -> None:
+        if not self.enable_motion_commands:
+            raise RuntimeError("KinovaRobot was created with enable_motion_commands=False")
         command_twist = twist_base.copy()
         command_twist[:3] = self._base_vector_to_command_frame(twist_base[:3])
         command_twist[3:6] = self._base_vector_to_command_frame(twist_base[3:6])
@@ -300,7 +311,7 @@ class KinovaRobot:
             self._ros_stale_timeout_s = stale_timeout_s
 
     def _publish_ros_twist(self, twist_array: FloatArray) -> None:
-        if self._ros_interface is None or Twist is None:
+        if self._ros_interface is None or Twist is None or self._ros_interface.twist_pub is None:
             return
         twist = Twist()
         twist.linear.x = float(twist_array[0])
@@ -490,22 +501,32 @@ class KinovaRobot:
             raise RuntimeError("KinovaRobot is not connected. Call connect() first.")
 
     @staticmethod
-    def _ensure_ros2_available() -> None:
-        missing = []
-        for name, value in {
+    def _ensure_ros2_available(require_twist: bool = True) -> None:
+        required = {
             "rclpy": rclpy,
-            "geometry_msgs.msg.Twist": Twist,
             "sensor_msgs.msg.JointState": JointState,
             "tf2_ros.Buffer": Buffer,
             "tf2_ros.TransformListener": TransformListener,
             "tf_transformations.euler_from_quaternion": euler_from_quaternion,
-        }.items():
+        }
+        if require_twist:
+            required["geometry_msgs.msg.Twist"] = Twist
+
+        missing = []
+        for name, value in required.items():
             if value is None:
                 missing.append(name)
         if missing:
+            hint = (
+                " Source your ROS2 and Kinova workspaces before running, for example: "
+                "`source /opt/ros/$ROS_DISTRO/setup.bash` and then source your "
+                "ros2_kortex workspace install/setup.bash."
+            )
             raise RuntimeError(
                 "ROS2 Kinova mode requires sourced ROS2/Kinova environment. Missing: "
                 + ", ".join(missing)
+                + "."
+                + hint
             )
 
     @staticmethod

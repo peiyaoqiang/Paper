@@ -3,6 +3,7 @@ matplotlib>=3.5
 PyYAML>=6.0
 Pillow>=9.0
 pygame>=2.5
+pyspacemouse>=2.0
 pyrealsense2>=2.54; platform_system == "Linux"
 pymodbus>=3.0
 pyserial>=3.5

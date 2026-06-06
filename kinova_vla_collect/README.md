@@ -1,6 +1,6 @@
 # kinova_vla_collect
 
-Kinova Gen3 + wrist-mounted Intel RealSense D435i + Xbox controller + Modbus gripper data collection scaffold for VLA training.
+Kinova Gen3 + wrist-mounted Intel RealSense D435i + Xbox or Kinova teach-mode data collection scaffold for VLA training.
 
 The first task is `pick up the red ball`. The raw action is:
 
@@ -10,7 +10,7 @@ action = [dx, dy, dz, droll, dpitch, dyaw, gripper]
 
 where `dx/dy/dz` are end-effector delta translations in meters per step,
 `droll/dpitch/dyaw` are end-effector delta RPY rotations in radians per step,
-and `gripper` is `-1` open, `0` hold, `+1` close.
+and `gripper` is `-1` open target or `+1` close target in training data.
 
 ## Install
 
@@ -78,6 +78,20 @@ Recommended first real run:
 - Test `Back` stops the program and sends zero twist.
 - Start with no object and collect one short failure episode.
 - Then collect `pick up the red ball` episodes with `Start` / `A` / `B`.
+
+## Kinova Teach-Mode Collection
+
+For the task `put the red ball on the black X`, use Kinova teach/manual-drag
+mode instead of Xbox motion commands:
+
+```bash
+PYTHONPATH=src python3 scripts/collect_teach_place_red_ball_on_black_x.py \
+  --config configs/collect_place_red_ball_on_black_x.yaml
+```
+
+Keyboard lifecycle controls are `r` start, `v` save success, `b` save failure,
+and `q` quit. The gripper target can come from an end-effector button exposed as
+a ROS2 topic via `teach.gripper_button`, with `o/c/g` kept as keyboard fallback.
 
 ## Inspect dataset
 

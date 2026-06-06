@@ -256,7 +256,8 @@ class OpenPI0DeploymentRunner:
         if self.camera_color_order not in {"rgb", "bgr"}:
             raise ValueError("camera_color_order must be 'rgb' or 'bgr'")
 
-        self.run_dir = log_dir / datetime.now().strftime("%Y%m%d_%H%M%S_openpi0_deploy")
+        self.log_dir = log_dir
+        self.run_dir = self._make_run_dir("openpi0_deploy")
         self.jsonl_path = self.run_dir / "steps.jsonl"
 
         self.camera = RealSenseCamera(
@@ -445,10 +446,184 @@ class OpenPI0DeploymentRunner:
             self._shutdown()
             print(f"Deployment log: {self.run_dir}")
 
+    def run_prompt_once(self, task_prompt: str, prepare_gripper: bool = True) -> None:
+        previous_prompt = self.task_prompt
+        self.task_prompt = task_prompt
+        self._reset_run_log("openpi0_deploy")
+        if prepare_gripper:
+            self._prepare_gripper_for_grasp()
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self._write_run_config()
+        print(
+            f"OpenPI0 rollout: prompt={self.task_prompt!r}, hz={self.hz:.2f}, "
+            f"max_steps={self.max_steps}, chunk_steps={self.chunk_steps}. Press q to stop."
+        )
+        next_tick = time.monotonic()
+        step_index = 0
+        try:
+            with KeyboardStopper() as keyboard:
+                while step_index < self.max_steps:
+                    if keyboard.should_stop():
+                        print("Stop requested by keyboard.")
+                        break
+
+                    loop_start = time.monotonic()
+                    image, state = self._observe()
+                    if self.preview_window.show(image, f"step {step_index}/{self.max_steps}"):
+                        print("Stop requested by preview window.")
+                        break
+                    obs = self._make_observation(image, state)
+                    response = self.policy.infer(obs)
+                    raw_chunk = parse_action_chunk(response)
+                    executed_this_query = 0
+
+                    for chunk_index, raw_action in enumerate(raw_chunk[: self.chunk_steps]):
+                        if step_index >= self.max_steps:
+                            break
+                        current_state = self.robot.get_state().astype(np.float32)
+                        current_state = current_state.copy()
+                        current_state[6] = self.gripper.get_position()
+                        safe_action = self._make_safe_action(raw_action, current_state)
+                        self.robot.step_delta_action(safe_action, self.dt)
+                        gripper_command = self._apply_gripper_action(safe_action, step_index)
+                        elapsed_ms = (time.monotonic() - loop_start) * 1000.0
+                        self._log_step(
+                            step_index=step_index,
+                            chunk_index=chunk_index,
+                            state=current_state,
+                            raw_action=raw_action,
+                            safe_action=safe_action,
+                            response=response,
+                            elapsed_ms=elapsed_ms,
+                            gripper_name=gripper_command,
+                            image=image,
+                        )
+                        if step_index % max(1, int(self.hz)) == 0:
+                            print(
+                                f"step={step_index:04d}/{self.max_steps} chunk={chunk_index} "
+                                f"safe={safe_action.tolist()} ee_z={float(current_state[2]):.4f} "
+                                f"gripper={gripper_command} loop_ms={elapsed_ms:.1f}"
+                            )
+                        step_index += 1
+                        executed_this_query += 1
+
+                        next_tick += self.dt
+                        sleep_s = next_tick - time.monotonic()
+                        if sleep_s > 0.0:
+                            time.sleep(sleep_s)
+                        else:
+                            next_tick = time.monotonic()
+
+                        if self.gripper_mode == "close_only" and gripper_command == "close":
+                            self._lift_after_close()
+                            print("close_only grasp rollout finished.")
+                            return
+
+                    if executed_this_query == 0:
+                        raise RuntimeError("OpenPI0 policy returned no executable actions")
+        except Exception:
+            self._emergency_cleanup()
+            raise
+        finally:
+            self.robot.stop()
+            self.task_prompt = previous_prompt
+            print(f"Deployment log: {self.run_dir}")
+
+    def reset_to_pose(
+        self,
+        target_pose: FloatArray,
+        hz: float = 10.0,
+        timeout_s: float = 45.0,
+        position_tolerance_m: float = 0.01,
+        rotation_tolerance_rad: float = 0.08,
+        max_delta_m: float | None = None,
+        max_delta_rad: float | None = None,
+        open_gripper: bool = True,
+    ) -> None:
+        target = np.asarray(target_pose, dtype=np.float32)
+        if target.shape != (6,):
+            raise ValueError(f"reset target pose must have shape (6,), got {target.shape}")
+        if hz <= 0.0:
+            raise ValueError("reset hz must be positive")
+        if timeout_s <= 0.0:
+            raise ValueError("reset timeout must be positive")
+        if not self.safety.workspace.contains_position(target[:3]):
+            raise ValueError(f"reset target position is outside workspace: {target[:3].tolist()}")
+
+        if open_gripper:
+            print("Opening gripper for reset...")
+            self.gripper.open_gripper()
+            if self.startup_open_s > 0.0:
+                time.sleep(self.startup_open_s)
+            self.gripper.hold()
+
+        dt = 1.0 / hz
+        limiter = SafetyLimiter(
+            max_delta_m=float(max_delta_m if max_delta_m is not None else self.max_delta_m),
+            max_delta_rad=float(max_delta_rad if max_delta_rad is not None else self.max_delta_rad),
+            workspace=self.safety.workspace,
+        )
+        deadline = time.monotonic() + timeout_s
+        step_index = 0
+        last_print_s = 0.0
+        print(f"Resetting to pose xyz/rpy={target.tolist()} at {hz:.1f} Hz...")
+        try:
+            while time.monotonic() < deadline:
+                state = self.robot.get_state().astype(np.float32)
+                position_error = target[:3] - state[:3]
+                rotation_error = _wrap_angle_array(target[3:6] - state[3:6])
+                position_norm = float(np.linalg.norm(position_error))
+                rotation_norm = float(np.linalg.norm(rotation_error))
+                if position_norm <= position_tolerance_m and rotation_norm <= rotation_tolerance_rad:
+                    self.robot.stop()
+                    print(
+                        f"Reset reached: pos_err={position_norm:.4f} m, "
+                        f"rot_err={rotation_norm:.4f} rad, steps={step_index}"
+                    )
+                    return
+
+                action = np.zeros(7, dtype=np.float32)
+                action[:3] = position_error
+                action[3:6] = rotation_error
+                safe_action = limiter.limit_action(action, current_position=state[:3])
+                if position_norm > position_tolerance_m and np.allclose(safe_action[:3], 0.0):
+                    raise RuntimeError(
+                        "Reset motion was blocked by workspace limits. "
+                        f"current={state[:3].tolist()} target={target[:3].tolist()}"
+                    )
+                self.robot.step_delta_action(safe_action, dt)
+
+                now = time.monotonic()
+                if now - last_print_s >= 1.0:
+                    print(
+                        f"reset step={step_index:04d} pos_err={position_norm:.4f} m "
+                        f"rot_err={rotation_norm:.4f} rad action={safe_action[:6].tolist()}"
+                    )
+                    last_print_s = now
+                step_index += 1
+                time.sleep(dt)
+        finally:
+            self.robot.stop()
+            self.gripper.hold()
+        raise TimeoutError(f"Timed out resetting to pose after {timeout_s:.1f}s")
+
     def _connect_hardware(self) -> None:
         self.camera.start()
         self.robot.connect()
         self.gripper.connect()
+
+    def _make_run_dir(self, suffix: str) -> Path:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        candidate = self.log_dir / f"{stamp}_{suffix}"
+        counter = 1
+        while candidate.exists():
+            candidate = self.log_dir / f"{stamp}_{counter:02d}_{suffix}"
+            counter += 1
+        return candidate
+
+    def _reset_run_log(self, suffix: str) -> None:
+        self.run_dir = self._make_run_dir(suffix)
+        self.jsonl_path = self.run_dir / "steps.jsonl"
 
     def _observe(self) -> tuple[ImageArray, FloatArray]:
         image = self.camera.get_rgb()
@@ -762,6 +937,10 @@ def _normalize_server_uri(value: str) -> str:
     if stripped.startswith("https://"):
         return "wss://" + stripped[len("https://") :]
     return "ws://" + stripped
+
+
+def _wrap_angle_array(values: FloatArray) -> FloatArray:
+    return ((np.asarray(values, dtype=np.float32) + np.pi) % (2.0 * np.pi) - np.pi).astype(np.float32)
 
 
 def _pack_numpy_array(obj: Any) -> Any:

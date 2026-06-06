@@ -41,17 +41,27 @@ source /opt/ros/<your_ros_distro>/setup.bash
 # source /home/pyq/code/ros2_kortex_ws/install/setup.bash if your Kinova stack needs it
 ```
 
-Before real collection, make sure these interfaces are alive:
+The teach collector can now start Kortex ROS2 bringup automatically. Before
+real collection, make sure the ROS2 environment is sourced and the robot is
+reachable:
 
 ```text
-/joint_states
-/twist_controller/commands
-TF: base_link -> end_effector_link
-TF: base_link -> tool_frame
 RealSense RGB stream
 CTAG gripper serial device, normally /dev/ttyUSB0
-Xbox controller
+Kinova teach/manual-drag mode
+Optional ROS2 topic for the end-effector button, if available
 ```
+
+Do not manually start the old twist-control launch for teach-mode collection:
+
+```bash
+ros2 launch kortex_bringup gen3.launch.py ... robot_controller:=twist_controller
+```
+
+The script starts `kortex_bringup` itself, waits for `/joint_states`, and
+deactivates `joint_trajectory_controller` and `twist_controller`, leaving only
+`joint_state_broadcaster` active for recording. This avoids taking control away
+from the Kortex Web App / wrist hand-guiding button.
 
 Check the config still says:
 
@@ -80,15 +90,23 @@ observe ball and X -> approach red ball -> close gripper -> lift -> move above X
 End the episode only after the final state is visible: the red ball should be
 on or very near the black X, with the gripper moved slightly away.
 
-## 2. Start Collection
+## 2. Start Teach-Mode Collection
 
 Run:
 
 ```bash
 cd /home/pyq/Paper/kinova_vla_collect
 source .venv/bin/activate
-PYTHONPATH=src python3 scripts/collect_pick_red_block.py \
+PYTHONPATH=src:$PYTHONPATH python3 scripts/collect_teach_place_red_ball_on_black_x.py \
   --config configs/collect_place_red_ball_on_black_x.yaml
+```
+
+This collector does not send Cartesian motion commands. Enable Kinova teach
+mode on the robot, drag the arm by hand, and let the script record the real
+end-effector state deltas:
+
+```text
+action = current_ee_pose - previous_ee_pose, plus gripper target
 ```
 
 The output directory is:
@@ -112,23 +130,34 @@ datasets/data/lerobot/place_red_ball_on_black_x/
     summary.json
 ```
 
-## 3. Xbox Controls
+## 3. Teach Controls
 
 ```text
-Start: start recording
-A: save current episode as success
-B: save current episode as failure
-Back: stop program
-LT: open gripper target (-1)
-RT: close gripper target (+1)
-left stick: dx / dy
-right stick vertical: dz
-right stick horizontal: dyaw
-LB / RB: droll
-D-pad up / down: dpitch
+r: start recording
+v: save current episode as success
+b: save current episode as failure
+q: stop program
+o: open gripper target (-1), keyboard fallback
+c: close gripper target (+1), keyboard fallback
+g: toggle gripper target, keyboard fallback
 ```
 
-Important: in the current collector, `B` saves a failed episode instead of
+If the Kinova end-effector button is exposed as a ROS2 topic, set this in
+`configs/collect_place_red_ball_on_black_x.yaml`:
+
+```yaml
+teach:
+  gripper_button:
+    mode: ros_topic
+    topic: /kinova/end_effector_button
+    message_type: std_msgs/Bool
+```
+
+The supported button message types are `std_msgs/Bool`, `std_msgs/Int32`, and
+`sensor_msgs/Joy`. With `toggle_on_press: true`, each button press toggles the
+target between open and close.
+
+Important: in the current collector, `b` saves a failed episode instead of
 deleting it. Keep failed episodes out of the training export unless you
 explicitly want to train from failures.
 
@@ -525,4 +554,3 @@ outputs/deploy_runs/<timestamp>_openpi0_deploy/
 
 Use `run_config.json`, `steps.jsonl`, and saved images to compare policy output
 against the training action contract.
-

@@ -65,6 +65,44 @@ xbox:
       stop: 6
       start: 7
 
+teach:
+  # New collection path for Kinova teach/manual-drag mode. The collector does
+  # not command arm motion; it records state deltas from the dragged trajectory.
+  command_source: keyboard
+  open_gripper_on_start: true
+  record_clipped_deltas: true
+  max_delta_warn_ratio: 0.8
+  bringup:
+    # Let the collection script start Kortex ROS2 by itself, then deactivate
+    # motion controllers so only /joint_states and TF remain for recording.
+    enabled: true
+    launch_package: kortex_bringup
+    launch_file: gen3.launch.py
+    robot_ip: 192.168.1.10
+    dof: 7
+    use_internal_bus_gripper_comm: false
+    robot_controller: joint_trajectory_controller
+    robot_pos_controller: twist_controller
+    launch_rviz: false
+    controller_manager: /controller_manager
+    deactivate_controllers: [joint_trajectory_controller, twist_controller]
+    startup_timeout_s: 90.0
+    keep_process_on_exit: false
+    log_output: false
+  gripper_button:
+    # Use "keyboard" for fallback testing with o/c/g keys. If the Kinova
+    # end-effector button is exposed through ROS2, switch this to "ros_topic"
+    # and set topic/message_type below.
+    mode: keyboard
+    topic: /kinova/end_effector_button
+    message_type: std_msgs/Bool
+    joy_button_index: 0
+    toggle_on_press: true
+    close_on_press: true
+    initial_target: -1.0
+    debounce_s: 0.25
+    apply_gripper_command: true
+
 camera:
   width: 640
   height: 480

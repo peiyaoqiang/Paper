@@ -57,6 +57,47 @@ class XboxConfig:
 
 
 @dataclass(frozen=True)
+class TeachButtonConfig:
+    mode: str
+    topic: str
+    message_type: str
+    joy_button_index: int
+    toggle_on_press: bool
+    close_on_press: bool
+    initial_target: float
+    debounce_s: float
+    apply_gripper_command: bool
+
+
+@dataclass(frozen=True)
+class TeachBringupConfig:
+    enabled: bool
+    launch_package: str
+    launch_file: str
+    robot_ip: str
+    dof: int
+    use_internal_bus_gripper_comm: bool
+    robot_controller: str
+    robot_pos_controller: str
+    launch_rviz: bool
+    controller_manager: str
+    deactivate_controllers: tuple[str, ...]
+    startup_timeout_s: float
+    keep_process_on_exit: bool
+    log_output: bool
+
+
+@dataclass(frozen=True)
+class TeachConfig:
+    command_source: str
+    open_gripper_on_start: bool
+    record_clipped_deltas: bool
+    max_delta_warn_ratio: float
+    gripper_button: TeachButtonConfig
+    bringup: TeachBringupConfig
+
+
+@dataclass(frozen=True)
 class CameraConfig:
     width: int
     height: int
@@ -119,6 +160,7 @@ class AppConfig:
     control: ControlConfig
     hardware: HardwareConfig
     xbox: XboxConfig
+    teach: TeachConfig
     camera: CameraConfig
     kinova: KinovaConfig
     gripper: GripperConfig
@@ -144,6 +186,21 @@ def load_config(path: str | Path) -> AppConfig:
     workspace = _require_mapping(control, "workspace")
     hardware = _require_mapping(raw, "hardware")
     xbox = _require_mapping(raw, "xbox")
+    teach = raw.get("teach", {})
+    if teach is None:
+        teach = {}
+    if not isinstance(teach, dict):
+        raise ValueError("Invalid config section: teach")
+    teach_button = teach.get("gripper_button", {})
+    if teach_button is None:
+        teach_button = {}
+    if not isinstance(teach_button, dict):
+        raise ValueError("Invalid config section: teach.gripper_button")
+    teach_bringup = teach.get("bringup", {})
+    if teach_bringup is None:
+        teach_bringup = {}
+    if not isinstance(teach_bringup, dict):
+        raise ValueError("Invalid config section: teach.bringup")
     camera = _require_mapping(raw, "camera")
     kinova = _require_mapping(raw, "kinova")
     gripper = _require_mapping(raw, "gripper")
@@ -184,6 +241,45 @@ def load_config(path: str | Path) -> AppConfig:
             debug=bool(xbox.get("debug", False)),
             dry_run_mode=str(xbox.get("dry_run_mode", "keyboard")),
             gripper_action_mode=str(xbox.get("gripper_action_mode", "persistent_target")),
+        ),
+        teach=TeachConfig(
+            command_source=str(teach.get("command_source", "keyboard")),
+            open_gripper_on_start=bool(teach.get("open_gripper_on_start", True)),
+            record_clipped_deltas=bool(teach.get("record_clipped_deltas", True)),
+            max_delta_warn_ratio=float(teach.get("max_delta_warn_ratio", 0.8)),
+            gripper_button=TeachButtonConfig(
+                mode=str(teach_button.get("mode", "keyboard")),
+                topic=str(teach_button.get("topic", "/kinova/end_effector_button")),
+                message_type=str(teach_button.get("message_type", "std_msgs/Bool")),
+                joy_button_index=int(teach_button.get("joy_button_index", 0)),
+                toggle_on_press=bool(teach_button.get("toggle_on_press", True)),
+                close_on_press=bool(teach_button.get("close_on_press", True)),
+                initial_target=1.0 if float(teach_button.get("initial_target", -1.0)) > 0.0 else -1.0,
+                debounce_s=float(teach_button.get("debounce_s", 0.25)),
+                apply_gripper_command=bool(teach_button.get("apply_gripper_command", True)),
+            ),
+            bringup=TeachBringupConfig(
+                enabled=bool(teach_bringup.get("enabled", False)),
+                launch_package=str(teach_bringup.get("launch_package", "kortex_bringup")),
+                launch_file=str(teach_bringup.get("launch_file", "gen3.launch.py")),
+                robot_ip=str(teach_bringup.get("robot_ip", raw.get("kinova", {}).get("ip", "192.168.1.10"))),
+                dof=int(teach_bringup.get("dof", 7)),
+                use_internal_bus_gripper_comm=bool(teach_bringup.get("use_internal_bus_gripper_comm", False)),
+                robot_controller=str(teach_bringup.get("robot_controller", "joint_trajectory_controller")),
+                robot_pos_controller=str(teach_bringup.get("robot_pos_controller", "twist_controller")),
+                launch_rviz=bool(teach_bringup.get("launch_rviz", False)),
+                controller_manager=str(teach_bringup.get("controller_manager", "/controller_manager")),
+                deactivate_controllers=tuple(
+                    str(item)
+                    for item in teach_bringup.get(
+                        "deactivate_controllers",
+                        ["joint_trajectory_controller", "twist_controller"],
+                    )
+                ),
+                startup_timeout_s=float(teach_bringup.get("startup_timeout_s", 30.0)),
+                keep_process_on_exit=bool(teach_bringup.get("keep_process_on_exit", False)),
+                log_output=bool(teach_bringup.get("log_output", False)),
+            ),
         ),
         camera=CameraConfig(
             width=int(camera["width"]),
